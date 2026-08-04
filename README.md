@@ -76,6 +76,24 @@ Validate both Buildroot defconfigs and shell syntax with:
 make check
 ```
 
+## Continuous integration and releases
+
+GitHub Actions builds the Pi 4 and Pi 5 images in parallel on every push to
+`main`. Buildroot downloads and a board-specific 2 GiB compiler cache are kept
+between runs. Main-branch builds warm those caches but do not publish images.
+
+Push a semantic version tag to create a release:
+
+```sh
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The workflow first creates a draft release, builds and validates both images,
+uploads XZ-compressed images and SHA-256 files, and publishes the release only
+after both parallel jobs succeed. If either board fails, the incomplete release
+remains a draft and can safely be retried; successful uploads use `--clobber`.
+
 ## Flashing
 
 Double-check the destination device. Writing an image destroys its existing

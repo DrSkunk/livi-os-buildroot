@@ -1,0 +1,148 @@
+name: Build LIVI OS images
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+concurrency:
+  group: livi-images-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  prepare:
+    name: Validate and prepare release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6.0.2
+
+      - name: Install host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            bc bison build-essential cpio file flex gettext git libncurses-dev \
+            libssl-dev python3 rsync unzip wget xz-utils
+
+      - name: Bootstrap Buildroot
+        run: make bootstrap
+
+      - name: Validate project
+        run: make check
+
+      - name: Create draft release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --draft \
+              --generate-notes \
+              --title "LIVI OS $RELEASE_TAG" \
+              --verify-tag
+          fi
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: prepare
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - board: pi4
+            name: Raspberry Pi 4
+            image: livi-os-rpi4.img
+          - board: pi5
+            name: Raspberry Pi 5
+            image: livi-os-rpi5.img
+    env:
+      LIVI_CHANNEL: nightly
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6.0.2
+
+      - name: Install host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            bc bison build-essential cpio file flex gettext git libncurses-dev \
+            libssl-dev python3 rsync unzip wget xz-utils
+
+      - name: Bootstrap Buildroot
+        run: make bootstrap
+
+      - name: Cache Buildroot downloads
+        uses: actions/cache@v5.0.5
+        with:
+          path: buildroot/dl
+          key: buildroot-dl-${{ runner.os }}-${{ matrix.board }}-${{ hashFiles('Makefile', 'configs/**', 'package/**/*.mk', 'package/**/*.hash', 'patches/**') }}
+          restore-keys: |
+            buildroot-dl-${{ runner.os }}-${{ matrix.board }}-
+
+      - name: Cache compiler output
+        uses: actions/cache@v5.0.5
+        with:
+          path: .buildroot-ccache/${{ matrix.board }}
+          key: buildroot-ccache-${{ runner.os }}-${{ matrix.board }}-${{ github.sha }}
+          restore-keys: |
+            buildroot-ccache-${{ runner.os }}-${{ matrix.board }}-
+
+      - name: Download and validate LIVI nightly
+        run: make fetch-livi
+
+      - name: Build image
+        run: make "${{ matrix.board }}"
+
+      - name: Compress and checksum image
+        env:
+          IMAGE: ${{ matrix.image }}
+          BOARD: ${{ matrix.board }}
+        run: |
+          image_path="output/$BOARD/images/$IMAGE"
+          test -s "$image_path"
+          xz --threads=0 --compress --keep --force -6 "$image_path"
+          sha256sum "$image_path.xz" > "$image_path.xz.sha256"
+
+      - name: Upload release assets
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          IMAGE: ${{ matrix.image }}
+          BOARD: ${{ matrix.board }}
+        run: |
+          gh release upload "$RELEASE_TAG" \
+            "output/$BOARD/images/$IMAGE.xz" \
+            "output/$BOARD/images/$IMAGE.xz.sha256" \
+            --clobber
+
+  publish:
+    name: Publish GitHub Release
+    if: github.ref_type == 'tag'
+    needs:
+      - prepare
+      - build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Publish completed release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release edit "$RELEASE_TAG" --draft=false

@@ -1,6 +1,7 @@
 /buildroot/
 /output/
 /dl/
+/.buildroot-ccache/
 /artifacts/*.AppImage
 *.img
 *.img.xz
