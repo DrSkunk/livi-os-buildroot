@@ -1,0 +1,13 @@
+[Unit]
+Description=Prepare LIVI persistent writable state
+Requires=data.mount livi-data-grow.service
+After=data.mount livi-data-grow.service local-fs.target
+Before=bluetooth.service NetworkManager.service livi-pipewire.service livi.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/livi-data-setup
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

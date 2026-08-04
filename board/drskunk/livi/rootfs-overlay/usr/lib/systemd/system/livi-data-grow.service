@@ -1,0 +1,13 @@
+[Unit]
+Description=Expand LIVI_DATA into unused media space
+Requires=data.mount
+After=data.mount
+Before=livi-data-setup.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/livi-data-grow
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

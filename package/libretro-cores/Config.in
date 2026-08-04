@@ -1,0 +1,25 @@
+config BR2_PACKAGE_LIVI_LIBRETRO_CORES
+	bool "LIVI Nintendo and Sega libretro cores"
+	depends on BR2_aarch64
+	select BR2_PACKAGE_LIBRETRO_NESTOPIA
+	select BR2_PACKAGE_LIBRETRO_SNES9X
+	select BR2_PACKAGE_LIBRETRO_GAMBATTE
+	select BR2_PACKAGE_LIBRETRO_MGBA
+	select BR2_PACKAGE_LIBRETRO_GENESIS_PLUS_GX
+	select BR2_PACKAGE_LIBRETRO_CORE_INFO
+	help
+	  Installs pinned cores for NES, SNES, Game Boy/Game Boy Color,
+	  Game Boy Advance, Sega Genesis/Mega Drive and Sega Master System.
+
+config BR2_PACKAGE_LIBRETRO_NESTOPIA
+	bool
+config BR2_PACKAGE_LIBRETRO_SNES9X
+	bool
+config BR2_PACKAGE_LIBRETRO_GAMBATTE
+	bool
+config BR2_PACKAGE_LIBRETRO_MGBA
+	bool
+config BR2_PACKAGE_LIBRETRO_GENESIS_PLUS_GX
+	bool
+config BR2_PACKAGE_LIBRETRO_CORE_INFO
+	bool

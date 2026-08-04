@@ -1,0 +1,31 @@
+#!/bin/sh
+
+case "$1" in
+  start)
+    echo "Mounting LIVI persistent data"
+    mkdir -p /run /tmp /var/log /data
+    mount -a -t tmpfs
+    if ! mount /data; then
+      echo "FATAL: LIVI_DATA cannot be mounted; application will not start" >&2
+      touch /run/livi-data-failed
+      exit 0
+    fi
+    if [ ! -e /data/.livi-data ]; then
+      echo "FATAL: wrong filesystem mounted at /data" >&2
+      touch /run/livi-data-failed
+      exit 0
+    fi
+    mkdir -p /data/livi/app /data/livi/config /data/livi/cache /data/livi/log /data/livi/update \
+      /data/games/roms /data/games/retroarch/playlists /data/games/retroarch/thumbnails \
+      /data/bluetooth /data/network /data/machine /run/user/1000 /var/lib/bluetooth
+    touch /data/machine/machine-id
+    chown -R livi:livi /data/livi /data/games /run/user/1000
+    chmod 0700 /run/user/1000
+    chmod 0750 /data/livi/app /data/livi/config /data/livi/update
+    mount --bind /data/bluetooth /var/lib/bluetooth
+    mount --bind /data/machine/machine-id /etc/machine-id
+    ;;
+  stop)
+    sync
+    ;;
+esac

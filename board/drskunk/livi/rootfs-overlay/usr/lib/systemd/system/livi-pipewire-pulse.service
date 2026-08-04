@@ -1,0 +1,14 @@
+[Unit]
+Description=PipeWire PulseAudio compatibility for LIVI
+Requires=livi-pipewire.service
+After=livi-pipewire.service
+
+[Service]
+User=livi
+Environment=HOME=/home/livi
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+ExecStart=/usr/bin/pipewire-pulse
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=WirePlumber policy manager for LIVI
+Requires=livi-pipewire.service
+After=livi-pipewire.service
+
+[Service]
+User=livi
+Environment=HOME=/home/livi
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+ExecStart=/usr/bin/wireplumber
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+config BR2_PACKAGE_RETROARCH
+	bool "RetroArch frontend for LIVI"
+	depends on BR2_aarch64
+	depends on !BR2_STATIC_LIBS
+	depends on BR2_PACKAGE_HAS_LIBEGL
+	depends on BR2_PACKAGE_HAS_LIBGLES
+	depends on BR2_PACKAGE_HAS_UDEV
+	select BR2_PACKAGE_ALSA_LIB
+	select BR2_PACKAGE_LIBUSB
+	select BR2_PACKAGE_WAYLAND
+	select BR2_PACKAGE_ZLIB
+	help
+	  RetroArch frontend built for Wayland, OpenGL ES 3, udev input and
+	  ALSA. Cores and mutable assets are stored on LIVI_DATA.

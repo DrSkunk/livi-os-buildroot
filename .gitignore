@@ -1,0 +1,6 @@
+/buildroot/
+/output/
+/dl/
+/artifacts/*.AppImage
+*.img
+*.img.xz

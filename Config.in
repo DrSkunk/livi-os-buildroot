@@ -1,0 +1,6 @@
+menu "LIVI OS packages"
+source "$BR2_EXTERNAL_LIVI_OS_PATH/package/livi/Config.in"
+source "$BR2_EXTERNAL_LIVI_OS_PATH/package/minidsp-rs/Config.in"
+source "$BR2_EXTERNAL_LIVI_OS_PATH/package/retroarch/Config.in"
+source "$BR2_EXTERNAL_LIVI_OS_PATH/package/libretro-cores/Config.in"
+endmenu

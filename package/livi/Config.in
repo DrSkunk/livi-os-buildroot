@@ -1,0 +1,22 @@
+config BR2_PACKAGE_LIVI
+	bool "LIVI automotive head unit"
+	depends on BR2_aarch64
+	depends on BR2_TOOLCHAIN_USES_GLIBC
+	depends on !BR2_STATIC_LIBS
+	select BR2_PACKAGE_BASH
+	select BR2_PACKAGE_CA_CERTIFICATES
+	select BR2_PACKAGE_LIBCURL
+	help
+	  Installs a factory LIVI ARM64 AppImage. At runtime it is copied to
+	  the writable data partition so LIVI's atomic in-place updater works.
+
+if BR2_PACKAGE_LIVI
+
+config BR2_PACKAGE_LIVI_APPIMAGE
+	string "Path to ARM64 LIVI AppImage"
+	default "$(BR2_EXTERNAL_LIVI_OS_PATH)/artifacts/LIVI-arm64.AppImage"
+	help
+	  Absolute path, or path interpreted by the build shell, to an ARM64
+	  LIVI AppImage. Run `make fetch-livi` before building.
+
+endif

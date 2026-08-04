@@ -1,0 +1,1 @@
+livi -1 livi -1 =livi /home/livi /bin/bash video,render,input,audio,seat,bluetooth,plugdev -

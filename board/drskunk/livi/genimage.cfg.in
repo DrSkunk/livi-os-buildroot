@@ -1,0 +1,42 @@
+image boot.vfat {
+	vfat {
+		label = "LIVI_BOOT"
+		files = {
+#BOOT_FILES#
+		}
+	}
+	size = 256M
+}
+
+image livi-os-#BOARD#.img {
+	hdimage {
+		partition-table-type = "gpt"
+	}
+
+	partition boot {
+		partition-type-uuid = U
+		partition-uuid = "9fa21264-f0d8-41f0-a83a-4f85d8224a8b"
+		image = "boot.vfat"
+		bootable = true
+	}
+
+	partition root-a {
+		partition-type-uuid = L
+		partition-uuid = "8d9f2f13-5a82-4fd8-93e7-88e7ea6118d2"
+		image = "rootfs.squashfs"
+		size = 1536M
+	}
+
+	partition root-b {
+		partition-type-uuid = L
+		partition-uuid = "4af7b146-2c77-4808-881b-1e3ad8d15be8"
+		image = "rootfs.squashfs"
+		size = 1536M
+	}
+
+	partition data {
+		partition-type-uuid = L
+		partition-uuid = "d38e4e2e-3f14-4b0a-886a-66d44c131703"
+		image = "livi-data.ext4"
+	}
+}

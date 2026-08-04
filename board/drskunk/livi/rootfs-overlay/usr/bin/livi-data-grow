@@ -1,0 +1,23 @@
+#!/bin/sh
+set -eu
+
+marker=/data/.expanded
+[ -e "$marker" ] && exit 0
+grep -qw 'livi.grow_data=1' /proc/cmdline || exit 0
+
+partition="$(findmnt -n -o SOURCE /data)"
+case "$partition" in /dev/*) ;; *) echo "Cannot resolve LIVI_DATA device" >&2; exit 1;; esac
+parent="$(lsblk -n -o PKNAME "$partition" | head -n1)"
+number="$(lsblk -n -o PARTN "$partition" | head -n1)"
+[ -n "$parent" ] && [ -n "$number" ] || { echo "Cannot resolve data parent/partition" >&2; exit 1; }
+disk="/dev/$parent"
+
+# The data partition is deliberately last. Rewriting the same start with a '+ '
+# size consumes only currently unpartitioned sectors and is idempotent.
+sfdisk --dump "$disk" > /run/livi-partition-table.before
+printf ',+\n' | sfdisk --no-reread --force -N "$number" "$disk"
+partx --update --nr "$number" "$disk"
+resize2fs "$partition"
+sync
+touch "$marker"
+sync

@@ -1,0 +1,39 @@
+#!/bin/sh
+set -eu
+
+ROOT_A=8d9f2f13-5a82-4fd8-93e7-88e7ea6118d2
+ROOT_B=4af7b146-2c77-4808-881b-1e3ad8d15be8
+STATE=/data/os-update
+image="${1:?usage: livi-os-update ROOTFS.squashfs SIGNATURE}"
+signature="${2:?usage: livi-os-update ROOTFS.squashfs SIGNATURE}"
+key="$STATE/trusted.pem"
+
+[ -f "$image" ] && [ -f "$signature" ] || { echo "Image or signature missing" >&2; exit 1; }
+[ -f "$key" ] || { echo "Provision $key before OS updates" >&2; exit 1; }
+[ "$(od -An -tx1 -N4 "$image" | tr -d ' \n')" = 68737173 ] || { echo "Not a SquashFS image" >&2; exit 1; }
+openssl dgst -sha256 -verify "$key" -signature "$signature" "$image"
+
+current="$(livi-os-slot current)"
+case "$current" in
+  "$ROOT_A") target="$ROOT_B";;
+  "$ROOT_B") target="$ROOT_A";;
+  *) echo "Unknown current root slot: $current" >&2; exit 1;;
+esac
+device="$(readlink -f "/dev/disk/by-partuuid/$target")"
+[ -b "$device" ] || { echo "Inactive root device not found" >&2; exit 1; }
+image_size="$(stat -c %s "$image")"
+device_size="$(blockdev --getsize64 "$device")"
+[ "$image_size" -le "$device_size" ] || { echo "Image exceeds root slot" >&2; exit 1; }
+
+echo "Writing verified OS image to inactive slot $target"
+dd if="$image" of="$device" bs=4M conv=fsync
+expected="$(sha256sum "$image" | awk '{print $1}')"
+actual="$(head -c "$image_size" "$device" | sha256sum | awk '{print $1}')"
+[ "$actual" = "$expected" ] || { echo "Inactive-slot readback verification failed" >&2; exit 1; }
+
+mkdir -p "$STATE"
+printf '%s\n%s\n0\n%s\n' "$target" "$current" "$expected" > "$STATE/pending.new"
+sync
+mv -f "$STATE/pending.new" "$STATE/pending"
+livi-os-slot switch "$target"
+echo "OS installed. Reboot to test slot $target."

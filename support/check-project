@@ -1,0 +1,40 @@
+#!/bin/sh
+set -eu
+
+root="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
+failed=0
+
+for script in $(find "$root/board" "$root/support" -type f \( -name '*.sh' -o -path '*/init.d/*' -o -path '*/usr/bin/livi-*' -o -name 'fetch-livi' -o -name 'check-project' \)); do
+  if ! sh -n "$script" 2>/dev/null; then
+    # Bash scripts may intentionally use arrays or arithmetic-for.
+    if ! bash -n "$script"; then
+      echo "syntax failure: $script" >&2
+      failed=1
+    fi
+  fi
+done
+
+for required in \
+  board/drskunk/livi/rootfs-overlay/usr/bin/livi-os-slot \
+  board/drskunk/livi/rootfs-overlay/usr/bin/livi-os-update \
+  board/drskunk/livi/rootfs-overlay/usr/bin/livi-data-grow; do
+  test -x "$root/$required" || { echo "not executable: $required" >&2; failed=1; }
+done
+
+grep -q 'partition root-a' "$root/board/drskunk/livi/genimage.cfg.in" || failed=1
+grep -q 'partition root-b' "$root/board/drskunk/livi/genimage.cfg.in" || failed=1
+grep -q 'livi.grow_data=1' "$root/board/drskunk/livi/cmdline-rpi4.txt" || failed=1
+grep -q 'livi.grow_data=1' "$root/board/drskunk/livi/cmdline-rpi5.txt" || failed=1
+
+for board in pi4 pi5; do
+  echo "Validating $board defconfig"
+  make -s -C "$root" "${board}_defconfig"
+  test -f "$root/output/$board/.config" || failed=1
+done
+
+if command -v shellcheck >/dev/null 2>&1; then
+  find "$root/board" "$root/support" -type f \( -name '*.sh' -o -path '*/init.d/*' -o -path '*/usr/bin/livi-*' \) \
+    -exec shellcheck -x {} + || failed=1
+fi
+
+exit "$failed"

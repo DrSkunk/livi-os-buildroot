@@ -1,0 +1,85 @@
+#!/bin/sh
+set -eu
+
+ROOT_A=8d9f2f13-5a82-4fd8-93e7-88e7ea6118d2
+ROOT_B=4af7b146-2c77-4808-881b-1e3ad8d15be8
+STATE=/data/os-update
+PENDING="$STATE/pending"
+
+current_uuid() {
+  sed -n 's/.*root=PARTUUID=\([^ ]*\).*/\1/p' /proc/cmdline | tr 'A-F' 'a-f'
+}
+
+cmdline_path() {
+  for path in /boot/cmdline.txt /boot/rpi-firmware/cmdline.txt; do
+    [ -f "$path" ] && { printf '%s\n' "$path"; return; }
+  done
+  echo "Raspberry Pi cmdline.txt not found" >&2
+  return 1
+}
+
+switch_to() {
+  uuid="$1"
+  case "$uuid" in "$ROOT_A"|"$ROOT_B") ;; *) echo "Invalid root slot UUID" >&2; return 1;; esac
+  path="$(cmdline_path)"
+  mount -o remount,rw /boot
+  trap 'mount -o remount,ro /boot 2>/dev/null || true' EXIT INT TERM
+  sed "s/root=PARTUUID=[^ ]*/root=PARTUUID=$uuid/" "$path" > "$path.new"
+  chmod 0644 "$path.new"
+  sync
+  mv -f "$path.new" "$path"
+  sync
+  mount -o remount,ro /boot
+  trap - EXIT INT TERM
+}
+
+mkdir -p "$STATE"
+case "${1:-}" in
+  current)
+    current_uuid
+    ;;
+  switch)
+    switch_to "${2:?slot UUID required}"
+    ;;
+  boot-check)
+    [ -f "$PENDING" ] || exit 0
+    target="$(sed -n '1p' "$PENDING")"
+    previous="$(sed -n '2p' "$PENDING")"
+    attempts="$(sed -n '3p' "$PENDING")"
+    case "$attempts" in ''|*[!0-9]*) attempts=0;; esac
+    [ "$(current_uuid)" = "$target" ] || exit 0
+    attempts=$((attempts + 1))
+    if [ "$attempts" -gt 3 ]; then
+      echo "OS slot $target failed three boots; restoring $previous" >&2
+      switch_to "$previous"
+      mv -f "$PENDING" "$STATE/failed-$(date +%s)"
+      sync
+      reboot -f
+      exit 0
+    fi
+    printf '%s\n%s\n%s\n' "$target" "$previous" "$attempts" > "$PENDING.new"
+    sync
+    mv -f "$PENDING.new" "$PENDING"
+    sync
+    ;;
+  boot-failed)
+    [ -f "$PENDING" ] || exit 0
+    [ "$(current_uuid)" = "$(sed -n '1p' "$PENDING")" ] || exit 0
+    sync
+    reboot -f
+    ;;
+  mark-good)
+    [ -f "$PENDING" ] || exit 0
+    current="$(current_uuid)"
+    [ "$current" = "$(sed -n '1p' "$PENDING")" ] || exit 0
+    printf '%s\n' "$current" > "$STATE/good-slot.new"
+    sync
+    mv -f "$STATE/good-slot.new" "$STATE/good-slot"
+    rm -f "$PENDING"
+    sync
+    ;;
+  *)
+    echo "usage: livi-os-slot {current|switch UUID|boot-check|boot-failed|mark-good}" >&2
+    exit 2
+    ;;
+esac

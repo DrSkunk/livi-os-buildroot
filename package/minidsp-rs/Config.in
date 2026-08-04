@@ -1,0 +1,8 @@
+config BR2_PACKAGE_MINIDSP_RS
+	bool "minidsp-rs daemon (prebuilt ARM64)"
+	depends on BR2_aarch64
+	depends on BR2_TOOLCHAIN_USES_GLIBC
+	select BR2_PACKAGE_LIBUSB
+	help
+	  Installs the upstream minidsp-rs ARM64 daemon and CLI, its udev
+	  rule, configuration, and loopback HTTP service on port 5380.

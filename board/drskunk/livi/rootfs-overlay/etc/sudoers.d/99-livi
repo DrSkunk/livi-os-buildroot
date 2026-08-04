@@ -1,0 +1,2 @@
+Cmnd_Alias LIVI_HELPER = /usr/bin/python3 *livi-helper.py
+livi ALL=(root) NOPASSWD: SETENV: LIVI_HELPER

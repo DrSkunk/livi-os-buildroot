@@ -1,0 +1,20 @@
+[Unit]
+Description=LIVI automotive kiosk with update rollback
+Requires=livi-data-setup.service livi-os-slot.service livi-pipewire.service livi-wireplumber.service seatd.service
+After=livi-data-setup.service livi-os-slot.service livi-pipewire.service livi-pipewire-pulse.service livi-wireplumber.service seatd.service
+Conflicts=getty@tty1.service
+StartLimitIntervalSec=120
+StartLimitBurst=4
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/livi-supervisor
+Restart=on-failure
+RestartSec=3
+TTYPath=/dev/tty1
+StandardInput=tty
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

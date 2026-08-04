@@ -1,0 +1,13 @@
+[Unit]
+Description=MiniDSP Server
+Requires=livi-data-setup.service
+After=livi-data-setup.service network.target
+
+[Service]
+ExecStart=/usr/bin/minidspd --config /etc/minidsp/config.toml
+KillMode=process
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,24 @@
+#!/bin/sh
+
+CONFIG=/data/livi/config/LIVI/config.json
+BACKUP=/data/livi/config/config.json.last-good
+
+valid() { [ -s "$1" ] && jq -e 'type == "object"' "$1" >/dev/null 2>&1; }
+backup() {
+  valid "$CONFIG" || return 0
+  cmp -s "$CONFIG" "$BACKUP" 2>/dev/null && return 0
+  cp "$CONFIG" "$BACKUP.new" && sync && mv -f "$BACKUP.new" "$BACKUP" && sync
+}
+restore() {
+  if [ -e "$CONFIG" ] && ! valid "$CONFIG" && valid "$BACKUP"; then
+    echo "Restoring last-known-good LIVI config" >&2
+    cp "$BACKUP" "$CONFIG.new" && sync && mv -f "$CONFIG.new" "$CONFIG"
+  fi
+}
+
+case "${1:-}" in
+  restore) restore ;;
+  watch) while sleep 5; do backup; done ;;
+  backup) backup ;;
+  *) echo "usage: livi-config-guard {restore|watch|backup}" >&2; exit 2 ;;
+esac

@@ -1,0 +1,111 @@
+#!/bin/bash
+set -u
+
+FACTORY=/opt/livi-factory/LIVI.AppImage
+APP_DIR=/data/livi/app
+CURRENT="$APP_DIR/LIVI.AppImage"
+PREVIOUS="$APP_DIR/LIVI.AppImage.previous"
+STATE=/data/livi/update
+LOG=/data/livi/log/LIVI.log
+HEALTH_SECONDS=60
+MAX_ATTEMPTS=3
+
+hash_file() { sha256sum "$1" | awk '{print $1}'; }
+atomic_copy() {
+  local src="$1" dest="$2"
+  cp "$src" "$dest.new" && chmod 0755 "$dest.new" && sync && mv -f "$dest.new" "$dest" && sync
+}
+
+mkdir -p "$APP_DIR" "$STATE" /data/livi/config /data/livi/cache /run/user/1000
+if [ ! -x "$CURRENT" ]; then
+  echo "Installing factory LIVI image"
+  atomic_copy "$FACTORY" "$CURRENT" || exit 1
+fi
+
+current_hash="$(hash_file "$CURRENT")" || exit 1
+good_hash="$(cat "$STATE/good.sha256" 2>/dev/null || true)"
+
+if [ -z "$good_hash" ]; then
+  printf '%s\n' "$current_hash" > "$STATE/good.sha256.new"
+  sync
+  mv "$STATE/good.sha256.new" "$STATE/good.sha256"
+  atomic_copy "$CURRENT" "$PREVIOUS"
+  good_hash="$current_hash"
+fi
+
+if [ "$current_hash" = "$good_hash" ]; then
+  previous_hash="$(hash_file "$PREVIOUS" 2>/dev/null || true)"
+  [ "$previous_hash" = "$good_hash" ] || atomic_copy "$CURRENT" "$PREVIOUS"
+fi
+
+if [ "$current_hash" != "$good_hash" ]; then
+  pending_hash="$(sed -n '1p' "$STATE/pending" 2>/dev/null || true)"
+  attempts="$(sed -n '2p' "$STATE/pending" 2>/dev/null || true)"
+  case "$attempts" in ''|*[!0-9]*) attempts=0;; esac
+  [ "$pending_hash" = "$current_hash" ] || attempts=0
+  attempts=$((attempts + 1))
+  printf '%s\n%s\n' "$current_hash" "$attempts" > "$STATE/pending.new"
+  sync
+  mv "$STATE/pending.new" "$STATE/pending"
+  if [ "$attempts" -gt "$MAX_ATTEMPTS" ]; then
+    echo "LIVI candidate failed $MAX_ATTEMPTS boots; rolling back" >&2
+    if [ -x "$PREVIOUS" ] && [ "$(hash_file "$PREVIOUS")" = "$good_hash" ]; then
+      atomic_copy "$PREVIOUS" "$CURRENT" || exit 1
+    else
+      atomic_copy "$FACTORY" "$CURRENT" || exit 1
+      printf '%s\n' "$(hash_file "$CURRENT")" > "$STATE/good.sha256"
+    fi
+    rm -f "$STATE/pending"
+    current_hash="$(hash_file "$CURRENT")"
+  fi
+fi
+
+/usr/bin/livi-config-guard restore
+[ -f "$LOG" ] && [ "$(stat -c %s "$LOG" 2>/dev/null || echo 0)" -gt 4194304 ] && mv -f "$LOG" "$LOG.1"
+log_start="$(stat -c %s "$LOG" 2>/dev/null || echo 0)"
+
+chown livi:livi "$CURRENT"
+su -s /bin/bash -c "HOME=/home/livi TMPDIR=/data/livi/update XDG_RUNTIME_DIR=/run/user/1000 XDG_CONFIG_HOME=/data/livi/config XDG_CACHE_HOME=/data/livi/cache ELECTRON_OZONE_PLATFORM_HINT=wayland ELECTRON_ENABLE_LOGGING=1 LIVI_KIOSK=1 cage -s -- '$CURRENT'" livi >>"$LOG" 2>&1 &
+kiosk_pid=$!
+/usr/bin/livi-config-guard watch &
+guard_pid=$!
+
+healthy=1
+ready=0
+for ((second=0; second<HEALTH_SECONDS; second++)); do
+  if ! kill -0 "$kiosk_pid" 2>/dev/null; then healthy=0; break; fi
+  if [ -S /run/user/1000/wayland-0 ] && pgrep -u livi -f 'LIVI.AppImage' >/dev/null 2>&1; then
+    ready=1
+  fi
+  sleep 1
+done
+
+if [ "$ready" -ne 1 ]; then
+  echo "LIVI never reached compositor/application readiness" >&2
+  healthy=0
+fi
+if tail -c "+$((log_start + 1))" "$LOG" 2>/dev/null | \
+    grep -Eiq 'fatal error|failed to initialize (gstreamer|wayland)|segmentation fault|render process gone'; then
+  echo "LIVI emitted a fatal startup diagnostic" >&2
+  healthy=0
+fi
+
+if [ "$healthy" -eq 1 ]; then
+  running_hash="$(hash_file "$CURRENT" 2>/dev/null || true)"
+  if [ -n "$running_hash" ] && [ "$running_hash" = "$current_hash" ] && [ "$running_hash" != "$good_hash" ]; then
+    printf '%s\n' "$running_hash" > "$STATE/good.sha256.new"
+    sync
+    mv "$STATE/good.sha256.new" "$STATE/good.sha256"
+    rm -f "$STATE/pending"
+    sync
+  fi
+  /usr/bin/livi-os-slot mark-good
+else
+  /usr/bin/livi-os-slot boot-failed || true
+fi
+
+wait "$kiosk_pid"
+status=$?
+kill "$guard_pid" 2>/dev/null || true
+wait "$guard_pid" 2>/dev/null || true
+exit "$status"

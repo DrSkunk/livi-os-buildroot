@@ -1,0 +1,31 @@
+From 5a63bf31344c9bd39746a5ec828772fc61ab676c Mon Sep 17 00:00:00 2001
+From: LIVI OS <livi-os@localhost>
+Date: Tue, 4 Aug 2026 22:20:00 +0200
+Subject: [PATCH] pkgconfig: do not parse loader warnings as flags
+
+The scanner deliberately merges pkg-config stderr into stdout.  If a host
+shell emits a dynamic-loader warning while Buildroot's HOST_DIR is in
+LD_LIBRARY_PATH, words from that warning are consequently passed to the C
+compiler as input files.  Keep stderr separate: pkg-config diagnostics are
+already represented by its non-zero status and PkgConfigError.
+
+Signed-off-by: LIVI OS <livi-os@localhost>
+---
+ giscanner/pkgconfig.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/giscanner/pkgconfig.py b/giscanner/pkgconfig.py
+index d0a6bc2..698dcdd 100644
+--- a/giscanner/pkgconfig.py
++++ b/giscanner/pkgconfig.py
+@@ -31,7 +31,7 @@ def check_output(flags, ignore_errors, command=None):
+     argv = command[:]
+     argv.extend(flags)
+     try:
+-        return subprocess.check_output(argv, universal_newlines=True, stderr=subprocess.STDOUT)
++        return subprocess.check_output(argv, universal_newlines=True, stderr=subprocess.DEVNULL)
+     except subprocess.CalledProcessError as e:
+         output = e.output or ''
+         if ignore_errors:
+--
+2.50.1

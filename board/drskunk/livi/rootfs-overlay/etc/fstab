@@ -1,0 +1,8 @@
+proc            /proc                   proc    defaults                         0 0
+sysfs           /sys                    sysfs   defaults                         0 0
+devpts          /dev/pts                devpts  defaults,gid=5,mode=620          0 0
+tmpfs           /run                    tmpfs   mode=0755,nosuid,nodev           0 0
+tmpfs           /tmp                    tmpfs   mode=1777,nosuid,nodev,size=256M 0 0
+tmpfs           /var/log                tmpfs   mode=0755,nosuid,nodev,size=32M  0 0
+PARTUUID=9fa21264-f0d8-41f0-a83a-4f85d8224a8b /boot vfat ro,noatime,nosuid,nodev,noexec 0 0
+PARTUUID=d38e4e2e-3f14-4b0a-886a-66d44c131703 /data ext4 rw,noatime,nosuid,nodev,errors=remount-ro,commit=5 0 2
