@@ -8,7 +8,10 @@ image="${1:?usage: livi-os-update ROOTFS.squashfs SIGNATURE}"
 signature="${2:?usage: livi-os-update ROOTFS.squashfs SIGNATURE}"
 key="$STATE/trusted.pem"
 
-[ -f "$image" ] && [ -f "$signature" ] || { echo "Image or signature missing" >&2; exit 1; }
+if [ ! -f "$image" ] || [ ! -f "$signature" ]; then
+  echo "Image or signature missing" >&2
+  exit 1
+fi
 [ -f "$key" ] || { echo "Provision $key before OS updates" >&2; exit 1; }
 [ "$(od -An -tx1 -N4 "$image" | tr -d ' \n')" = 68737173 ] || { echo "Not a SquashFS image" >&2; exit 1; }
 openssl dgst -sha256 -verify "$key" -signature "$signature" "$image"

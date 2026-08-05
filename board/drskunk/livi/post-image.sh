@@ -23,7 +23,9 @@ truncate -s 2G "${BINARIES_DIR}/livi-data.ext4"
 
 FILES=()
 for file in "${BINARIES_DIR}"/*.dtb "${BINARIES_DIR}"/rpi-firmware/*; do
-  [ -e "$file" ] && FILES+=("${file#${BINARIES_DIR}/}")
+  if [ -e "$file" ]; then
+    FILES+=("${file#"${BINARIES_DIR}"/}")
+  fi
 done
 KERNEL="$(sed -n 's/^kernel=//p' "${BINARIES_DIR}/rpi-firmware/config.txt")"
 FILES+=("$KERNEL")

@@ -9,7 +9,10 @@ partition="$(findmnt -n -o SOURCE /data)"
 case "$partition" in /dev/*) ;; *) echo "Cannot resolve LIVI_DATA device" >&2; exit 1;; esac
 parent="$(lsblk -n -o PKNAME "$partition" | head -n1)"
 number="$(lsblk -n -o PARTN "$partition" | head -n1)"
-[ -n "$parent" ] && [ -n "$number" ] || { echo "Cannot resolve data parent/partition" >&2; exit 1; }
+if [ -z "$parent" ] || [ -z "$number" ]; then
+  echo "Cannot resolve data parent/partition" >&2
+  exit 1
+fi
 disk="/dev/$parent"
 
 # The data partition is deliberately last. Rewriting the same start with a '+ '

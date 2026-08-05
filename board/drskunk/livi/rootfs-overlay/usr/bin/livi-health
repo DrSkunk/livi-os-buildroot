@@ -5,8 +5,10 @@ failed=0
 check() { if "$@"; then printf 'ok   %s\n' "$*"; else printf 'FAIL %s\n' "$*"; failed=1; fi; }
 check mountpoint -q /data
 check mountpoint -q /boot
-findmnt -n -o OPTIONS / 2>/dev/null | tr ',' '\n' | grep -qx ro
-[ $? -eq 0 ] || { echo "FAIL root is not read-only"; failed=1; }
+if ! findmnt -n -o OPTIONS / 2>/dev/null | tr ',' '\n' | grep -qx ro; then
+  echo "FAIL root is not read-only"
+  failed=1
+fi
 check test -c /dev/dri/card0
 check test -x /data/livi/app/LIVI.AppImage
 check test -e /data/.expanded
