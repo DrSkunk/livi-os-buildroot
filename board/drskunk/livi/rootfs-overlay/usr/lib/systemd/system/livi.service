@@ -1,6 +1,6 @@
 [Unit]
 Description=LIVI automotive kiosk with update rollback
-Requires=livi-data-setup.service livi-os-slot.service livi-pipewire.service livi-wireplumber.service seatd.service
+Requires=livi-data-setup.service livi-os-slot.service livi-pipewire.service livi-pipewire-pulse.service livi-wireplumber.service seatd.service
 After=livi-data-setup.service livi-os-slot.service livi-pipewire.service livi-pipewire-pulse.service livi-wireplumber.service seatd.service
 Conflicts=getty@tty1.service
 StartLimitIntervalSec=120

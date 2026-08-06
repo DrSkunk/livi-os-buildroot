@@ -3,9 +3,9 @@ set -eu
 
 TARGET="${1:?target directory missing}"
 
-# BusyBox init runs these in lexical order. The immutable root owns defaults;
-# mutable state is created only after LIVI_DATA is checked and mounted.
-chmod 0755 "$TARGET"/etc/init.d/S0[123]* "$TARGET"/usr/bin/livi-* 2>/dev/null || true
+# The immutable root owns defaults; mutable state is created only after
+# LIVI_DATA is checked and mounted (systemd units under multi-user.target).
+chmod 0755 "$TARGET"/usr/bin/livi-* 2>/dev/null || true
 chmod 0755 "$TARGET/usr/libexec/livi-data-setup"
 chmod 0440 "$TARGET/etc/sudoers.d/99-livi"
 mkdir -p "$TARGET/data" "$TARGET/home/livi" "$TARGET/var/lib"

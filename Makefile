@@ -15,6 +15,10 @@ help:
 	@echo "make check           Validate both defconfigs and project scripts"
 
 bootstrap:
+	@if test -d "$(BUILDROOT_DIR)/.git" && test "$$(git -C "$(BUILDROOT_DIR)" rev-parse HEAD)" != "$(BUILDROOT_COMMIT)"; then \
+		echo "Buildroot revision changed; refreshing clone"; \
+		rm -rf "$(BUILDROOT_DIR)"; \
+	fi
 	@test -d "$(BUILDROOT_DIR)/.git" || git clone --depth 1 --branch "$(BUILDROOT_VERSION)" https://gitlab.com/buildroot.org/buildroot.git "$(BUILDROOT_DIR)"
 	@test "$$(git -C "$(BUILDROOT_DIR)" rev-parse HEAD)" = "$(BUILDROOT_COMMIT)" || { echo "Unexpected Buildroot revision" >&2; exit 1; }
 

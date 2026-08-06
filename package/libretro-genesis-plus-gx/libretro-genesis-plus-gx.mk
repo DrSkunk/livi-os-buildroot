@@ -6,7 +6,7 @@ LIBRETRO_GENESIS_PLUS_GX_DEPENDENCIES = zlib
 
 define LIBRETRO_GENESIS_PLUS_GX_BUILD_CMDS
 	$(TARGET_MAKE_ENV) $(MAKE) -C $(@D) -f Makefile.libretro platform=unix \
-		CC="$(TARGET_CC)" CXX="$(TARGET_CXX)" LD="$(TARGET_CC)" AR="$(TARGET_AR)"
+		CC="$(TARGET_CC)" CXX="$(TARGET_CXX)" LD="$(TARGET_CXX)" AR="$(TARGET_AR)"
 endef
 define LIBRETRO_GENESIS_PLUS_GX_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/genesis_plus_gx_libretro.so $(TARGET_DIR)/usr/lib/libretro/genesis_plus_gx_libretro.so
