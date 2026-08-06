@@ -6,7 +6,7 @@ RETROARCH_VERSION = 1.22.2
 RETROARCH_SITE = $(call github,libretro,RetroArch,v$(RETROARCH_VERSION))
 RETROARCH_LICENSE = GPL-3.0
 RETROARCH_LICENSE_FILES = COPYING
-RETROARCH_DEPENDENCIES = host-pkgconf alsa-lib libdrm libegl libgles libusb pipewire systemd wayland zlib
+RETROARCH_DEPENDENCIES = host-pkgconf alsa-lib dbus libdrm libegl libgles libusb pipewire systemd wayland zlib
 
 # RetroArch's qb configure only looks for ${CROSS_COMPILE}pkg-config in PATH
 # and ignores Buildroot's PKG_CONFIG; it must be pointed at the host wrapper
