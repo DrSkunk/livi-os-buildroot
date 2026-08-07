@@ -26,6 +26,26 @@ grep -q 'partition root-b' "$root/board/drskunk/livi/genimage.cfg.in" || failed=
 grep -q 'livi.grow_data=1' "$root/board/drskunk/livi/cmdline-rpi4.txt" || failed=1
 grep -q 'livi.grow_data=1' "$root/board/drskunk/livi/cmdline-rpi5.txt" || failed=1
 
+for config in config-rpi4.txt config-rpi5.txt; do
+  grep -qx 'display_auto_detect=1' "$root/board/drskunk/livi/$config" || {
+    echo "DSI display auto-detection is disabled: $config" >&2
+    failed=1
+  }
+done
+
+for symbol in \
+  CONFIG_DRM_MIPI_DSI \
+  CONFIG_DRM_PANEL_RASPBERRYPI_TOUCHSCREEN \
+  CONFIG_DRM_PANEL_WAVESHARE_TOUCHSCREEN \
+  CONFIG_DRM_PANEL_WAVESHARE_TOUCHSCREEN_V2 \
+  CONFIG_TOUCHSCREEN_EDT_FT5X06 \
+  CONFIG_TOUCHSCREEN_GOODIX; do
+  grep -qx "$symbol=y" "$root/board/drskunk/livi/linux.fragment" || {
+    echo "missing DSI kernel option: $symbol" >&2
+    failed=1
+  }
+done
+
 for board in pi4 pi5; do
   echo "Validating $board defconfig"
   make -s -C "$root" "${board}_defconfig"

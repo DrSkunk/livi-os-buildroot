@@ -115,6 +115,29 @@ Order) before relying on NVMe. The image enables the Pi 5 PCIe controller in
 `config.txt`; a standards-compliant HAT+ remains recommended. PCIe Gen 2 is kept
 at the supported default.
 
+### DSI displays
+
+Both images enable the Raspberry Pi MIPI DSI host, panel backlight and common
+touch controllers. Official Raspberry Pi DSI displays are detected at boot; no
+`config.txt` change is needed. Connect the display with the board powered off,
+using the correct FFC cable and connector for the Pi model.
+
+Third-party panels that cannot identify themselves need their vendor's device
+tree overlay. Add the appropriate line to `config-rpi4.txt` or
+`config-rpi5.txt` before building. For example, the pinned Raspberry Pi kernel
+supports Waveshare panels with an explicit model parameter:
+
+```text
+dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC
+```
+
+It also includes `vc4-kms-dsi-generic`, the ILI9881 5-inch and 7-inch overlays,
+the JDI LT070ME05000 overlay, and the Waveshare V2 overlay. Consult the panel
+vendor and the matching entry in the kernel overlay README for required model,
+lane, I2C and rotation parameters. Four-lane DSI panels require a board/connector
+that exposes four lanes; they are not supported by the two-lane Pi 4 display
+connector.
+
 ## Disk layout and power-loss behaviour
 
 | Partition | Filesystem | Normal mount | Purpose |

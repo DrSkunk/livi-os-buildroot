@@ -5,6 +5,7 @@ dtoverlay=vc4-kms-v3d-pi5,cma-512
 max_framebuffers=3
 disable_fw_kms_setup=1
 camera_auto_detect=1
+# Automatically load the matching overlay for supported Raspberry Pi DSI displays.
 display_auto_detect=1
 dtparam=audio=on
 dtparam=i2c_arm=on
