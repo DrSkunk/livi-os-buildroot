@@ -29,9 +29,13 @@ for file in "${BINARIES_DIR}"/*.dtb "${BINARIES_DIR}"/rpi-firmware/*; do
 done
 KERNEL="$(sed -n 's/^kernel=//p' "${BINARIES_DIR}/rpi-firmware/config.txt")"
 FILES+=("$KERNEL")
-BOOT_FILES="$(printf '\t\t\t\"%s\",\n' "${FILES[@]}")"
-sed -e "s|#BOOT_FILES#|${BOOT_FILES}|" -e "s|#BOARD#|${BOARD}|g" \
-  "$BOARD_DIR/genimage.cfg.in" > "$GENIMAGE_CFG"
+while IFS= read -r line; do
+  if [[ "$line" == *'#BOOT_FILES#'* ]]; then
+    printf '\t\t\t"%s",\n' "${FILES[@]}"
+  else
+    printf '%s\n' "${line//#BOARD#/$BOARD}"
+  fi
+done < "$BOARD_DIR/genimage.cfg.in" > "$GENIMAGE_CFG"
 
 rm -rf "$GENIMAGE_TMP"
 "${HOST_DIR}/bin/genimage" --rootpath "$ROOTPATH_TMP" --tmppath "$GENIMAGE_TMP" \

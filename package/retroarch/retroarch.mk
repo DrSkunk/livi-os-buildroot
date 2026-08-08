@@ -18,14 +18,14 @@ define RETROARCH_CONFIGURE_CMDS
 		--host=$(GNU_TARGET_NAME) --prefix=/usr \
 		--with-assets_dir=/usr/share/retroarch/assets \
 		--with-core_info_dir=/usr/share/libretro/info \
-		--enable-wayland --disable-x11 --enable-egl --enable-opengles3 \
+		--enable-wayland --disable-x11 --enable-egl --enable-opengles --enable-opengles3 \
 		--enable-udev --enable-alsa --enable-pipewire --enable-dbus \
-		--enable-systemd --enable-libusb --enable-neon --disable-qt \
+		--enable-systemd --enable-hid --enable-libusb --disable-neon --disable-qt \
 		--disable-vulkan --disable-ffmpeg --disable-pulse)
 endef
 
 define RETROARCH_BUILD_CMDS
-	$(TARGET_MAKE_ENV) $(MAKE) $(TARGET_CONFIGURE_OPTS) -C $(@D)
+	$(TARGET_MAKE_ENV) $(MAKE) -C $(@D)
 endef
 
 define RETROARCH_INSTALL_TARGET_CMDS
