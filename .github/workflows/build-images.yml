@@ -53,6 +53,18 @@ jobs:
               --verify-tag
           fi
 
+      - name: Prepare nightly release
+        if: github.ref_name == 'main' && github.ref_type != 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: |
+          if ! gh release view nightly >/dev/null 2>&1; then
+            gh release create nightly --prerelease --title "Nightly Build" --notes "Rolling nightly build."
+          else
+            gh release edit nightly --notes "Rolling nightly build. Latest commit: \`$SHA\`"
+          fi
+
   build:
     name: Build ${{ matrix.name }}
     needs: prepare
@@ -119,10 +131,10 @@ jobs:
           sha256sum "$image_path.xz" > "$image_path.xz.sha256"
 
       - name: Upload release assets
-        if: github.ref_type == 'tag'
+        if: github.ref_type == 'tag' || github.ref_name == 'main'
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || 'nightly' }}
           IMAGE: ${{ matrix.image }}
           BOARD: ${{ matrix.board }}
         run: |
