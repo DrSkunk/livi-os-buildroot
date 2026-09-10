@@ -115,28 +115,27 @@ Order) before relying on NVMe. The image enables the Pi 5 PCIe controller in
 `config.txt`; a standards-compliant HAT+ remains recommended. PCIe Gen 2 is kept
 at the supported default.
 
-### DSI displays
+### Waveshare 7.9inch HDMI LCD
 
-Both images enable the Raspberry Pi MIPI DSI host, panel backlight and common
-touch controllers. Official Raspberry Pi DSI displays are detected at boot; no
-`config.txt` change is needed. Connect the display with the board powered off,
-using the correct FFC cable and connector for the Pi model.
+Both images target the [Waveshare 7.9inch HDMI LCD](https://www.waveshare.com/wiki/7.9inch_HDMI_LCD)
+with HDMI video and five-point USB capacitive touch. Connect the LCD's HDMI
+input to the Pi's HDMI0 port (`HDMI-A-1`, nearest the USB-C power connector),
+and its TOUCH port to a Pi USB port before powering on.
 
-Third-party panels that cannot identify themselves need their vendor's device
-tree overlay. Add the appropriate line to `config-rpi4.txt` or
-`config-rpi5.txt` before building. For example, the pinned Raspberry Pi kernel
-supports Waveshare panels with an explicit model parameter:
+The kernel command line selects the native portrait mode, `400x1280@60`, on
+`HDMI-A-1`. KMS uses the panel's EDID for its detailed timings; keep the HDMI
+cable connected at boot. USB HID multitouch and libinput provide touch input.
+The previous DSI panel drivers and automatic DSI detection are disabled.
 
-```text
-dtoverlay=vc4-kms-dsi-waveshare-panel,7_0_inchC
-```
+These images use full KMS on both Pi models. The wiki's legacy `hdmi_group`,
+`hdmi_mode` and `hdmi_timings` firmware settings are not used. If the native
+mode is missing, check the HDMI connection and EDID before trying a generic
+CVT mode: its timings differ from this panel's vendor timings.
 
-It also includes `vc4-kms-dsi-generic`, the ILI9881 5-inch and 7-inch overlays,
-the JDI LT070ME05000 overlay, and the Waveshare V2 overlay. Consult the panel
-vendor and the matching entry in the kernel overlay README for required model,
-lane, I2C and rotation parameters. Four-lane DSI panels require a board/connector
-that exposes four lanes; they are not supported by the two-lane Pi 4 display
-connector.
+The default orientation keeps display and touch in their native coordinates.
+For a landscape installation, configure rotation in the Wayland compositor
+and verify touch alignment; the wiki's console `video=...,rotate=90` option
+alone does not configure the Cage application output.
 
 ## Disk layout and power-loss behaviour
 
