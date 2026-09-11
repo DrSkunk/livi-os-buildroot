@@ -1,0 +1,83 @@
+#!/usr/bin/python3
+"""Three-way migration of factory defaults into persistent configuration."""
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import stat
+import sys
+
+
+def entries(root):
+    result = {}
+    for directory, dirs, files in os.walk(root, followlinks=False):
+        for name in dirs + files:
+            path = Path(directory) / name
+            if path.is_symlink():
+                value = {"link": os.readlink(path)}
+            elif path.is_file():
+                value = {"sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                         "mode": stat.S_IMODE(path.stat().st_mode)}
+            else:
+                continue
+            result[str(path.relative_to(root))] = value
+    return result
+
+
+def install(source, target):
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temp = target.with_name(target.name + ".livi-tmp")
+    if temp.exists() or temp.is_symlink():
+        temp.unlink()
+    if source.is_symlink():
+        temp.symlink_to(os.readlink(source))
+    else:
+        shutil.copy2(source, temp)
+        with temp.open("rb") as handle:
+            os.fsync(handle.fileno())
+    os.replace(temp, target)
+
+
+def merge(source, target, state):
+    source, target, state = map(Path, (source, target, state))
+    target.mkdir(parents=True, exist_ok=True)
+    state.mkdir(parents=True, exist_ok=True)
+    manifest = state / "defaults.json"
+    old = json.loads(manifest.read_text()) if manifest.exists() else {}
+    new, local = entries(source), entries(target)
+    conflicts = []
+    revision = hashlib.sha256(json.dumps(new, sort_keys=True).encode()).hexdigest()
+    incoming = state / "incoming" / revision
+    for name in sorted(old.keys() | new.keys()):
+        before, after, current = old.get(name), new.get(name), local.get(name)
+        if current == after:
+            continue
+        destination = target / name
+        # Refuse to traverse a locally replaced directory symlink.
+        parents_safe = not any(p.is_symlink() for p in destination.parents if p != target and target in p.parents)
+        untouched = current == before and parents_safe and not destination.is_dir()
+        if untouched:
+            if after is None:
+                destination.unlink(missing_ok=True)
+            else:
+                install(source / name, destination)
+        elif before != after:
+            conflicts.append(name)
+            if after is not None:
+                install(source / name, incoming / name)
+            print(f"Preserved local configuration: {destination}", file=sys.stderr)
+    # The baseline is committed last. An interrupted migration can be rerun.
+    # Keep conflicts visible across later boots until an operator resolves them.
+    if conflicts:
+        (state / "conflicts.json").write_text(json.dumps(conflicts, indent=2) + "\n")
+    temp = state / "defaults.json.new"
+    temp.write_text(json.dumps(new, sort_keys=True) + "\n")
+    with temp.open("rb") as handle:
+        os.fsync(handle.fileno())
+    os.replace(temp, manifest)
+    os.sync()
+
+
+if __name__ == "__main__":
+    merge(*sys.argv[1:])

@@ -9,10 +9,17 @@ if ! findmnt -n -o OPTIONS / 2>/dev/null | tr ',' '\n' | grep -qx ro; then
   echo "FAIL root is not read-only"
   failed=1
 fi
-check test -c /dev/dri/card0
+display_found=0
+for connector in /sys/class/drm/card*-HDMI-A-1; do
+  [ -f "$connector/status" ] || continue
+  display_found=1
+  check grep -qx connected "$connector/status"
+  check grep -qx 400x1280 "$connector/modes"
+done
+[ "$display_found" -eq 1 ] || { echo "FAIL HDMI-A-1 connector missing"; failed=1; }
 check test -x /data/livi/app/LIVI.AppImage
 check test -e /data/.expanded
-check test -b /dev/watchdog
+check test -c /dev/watchdog
 slot="$(livi-os-slot current 2>/dev/null || true)"
 case "$slot" in
   8d9f2f13-5a82-4fd8-93e7-88e7ea6118d2|4af7b146-2c77-4808-881b-1e3ad8d15be8) echo "ok   root slot $slot";;
@@ -21,6 +28,7 @@ esac
 for core in nestopia snes9x gambatte mgba genesis_plus_gx; do
   check test -s "/usr/lib/libretro/${core}_libretro.so"
 done
+check su -s /bin/sh -c /usr/libexec/livi-kiosk-ready livi
 check pgrep pipewire
 check pgrep wireplumber
 check pgrep livi-supervisor

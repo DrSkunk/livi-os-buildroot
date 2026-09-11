@@ -7,16 +7,40 @@ STATE=/data/os-update
 image="${1:?usage: livi-os-update ROOTFS.squashfs SIGNATURE}"
 signature="${2:?usage: livi-os-update ROOTFS.squashfs SIGNATURE}"
 key="$STATE/trusted.pem"
+mkdir -p "$STATE"
+exec 9>/run/livi-os-update.lock
+flock -n 9 || { echo "Another OS update is running" >&2; exit 1; }
+[ ! -f "$STATE/pending" ] || { echo "Confirm or cancel the pending update first" >&2; exit 1; }
 
 if [ ! -f "$image" ] || [ ! -f "$signature" ]; then
   echo "Image or signature missing" >&2
   exit 1
 fi
+# Verify and write a private snapshot, so the caller cannot change the file
+# between signature verification and the block-device write.
+work="$(mktemp -d "$STATE/install.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+cp --reflink=auto "$image" "$work/rootfs.squashfs"
+cp "$signature" "$work/rootfs.sig"
+image="$work/rootfs.squashfs"
+signature="$work/rootfs.sig"
 [ -f "$key" ] || { echo "Provision $key before OS updates" >&2; exit 1; }
 [ "$(od -An -tx1 -N4 "$image" | tr -d ' \n')" = 68737173 ] || { echo "Not a SquashFS image" >&2; exit 1; }
 openssl dgst -sha256 -verify "$key" -signature "$signature" "$image"
+# The boot partition is shared. Reject roots built for another kernel/board.
+installed_boot="$(cat /usr/lib/livi/boot-id)"
+candidate_boot="$(unsquashfs -cat "$image" usr/lib/livi/boot-id)"
+[ -n "$installed_boot" ] && [ "$candidate_boot" = "$installed_boot" ] || {
+  echo "Boot artifacts differ; this update requires a full-image installation" >&2
+  exit 1
+}
 
 current="$(livi-os-slot current)"
+[ "$(livi-os-slot default)" = "$current" ] || {
+  echo "Confirm the running trial before installing another OS update" >&2; exit 1;
+}
 case "$current" in
   "$ROOT_A") target="$ROOT_B";;
   "$ROOT_B") target="$ROOT_A";;
@@ -34,9 +58,5 @@ expected="$(sha256sum "$image" | awk '{print $1}')"
 actual="$(head -c "$image_size" "$device" | sha256sum | awk '{print $1}')"
 [ "$actual" = "$expected" ] || { echo "Inactive-slot readback verification failed" >&2; exit 1; }
 
-mkdir -p "$STATE"
-printf '%s\n%s\n0\n%s\n' "$target" "$current" "$expected" > "$STATE/pending.new"
-sync
-mv -f "$STATE/pending.new" "$STATE/pending"
-livi-os-slot switch "$target"
-echo "OS installed. Reboot to test slot $target."
+livi-os-slot stage "$target" "$expected"
+echo "OS staged. Run livi-os-slot reboot to test it once; ordinary reboot keeps the previous root."

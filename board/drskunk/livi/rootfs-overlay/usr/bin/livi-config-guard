@@ -10,9 +10,11 @@ backup() {
   cp "$CONFIG" "$BACKUP.new" && sync && mv -f "$BACKUP.new" "$BACKUP" && sync
 }
 restore() {
-  if [ -e "$CONFIG" ] && ! valid "$CONFIG" && valid "$BACKUP"; then
+  if ! valid "$CONFIG" && valid "$BACKUP"; then
     echo "Restoring last-known-good LIVI config" >&2
-    cp "$BACKUP" "$CONFIG.new" && sync && mv -f "$CONFIG.new" "$CONFIG"
+    mkdir -p "$(dirname "$CONFIG")" && chown livi:livi "$(dirname "$CONFIG")" &&
+      cp "$BACKUP" "$CONFIG.new" && chown livi:livi "$CONFIG.new" &&
+      chmod 0600 "$CONFIG.new" && sync && mv -f "$CONFIG.new" "$CONFIG" && sync
   fi
 }
 

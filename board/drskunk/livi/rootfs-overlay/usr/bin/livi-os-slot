@@ -9,7 +9,15 @@ PENDING="$STATE/pending"
 current_uuid() {
   sed -n 's/.*root=PARTUUID=\([^ ]*\).*/\1/p' /proc/cmdline | tr 'A-F' 'a-f'
 }
-
+default_uuid() {
+  sed -n 's/.*root=PARTUUID=\([^ ]*\).*/\1/p' "$(cmdline_path)" | tr 'A-F' 'a-f'
+}
+is_trial() {
+  [ "$(od -An -tx1 /proc/device-tree/chosen/bootloader/tryboot 2>/dev/null | tr -d ' \n')" = 00000001 ]
+}
+valid_slot() {
+  case "$1" in "$ROOT_A"|"$ROOT_B") return 0;; *) echo "Invalid root slot UUID" >&2; return 1;; esac
+}
 cmdline_path() {
   for path in /boot/cmdline.txt /boot/rpi-firmware/cmdline.txt; do
     [ -f "$path" ] && { printf '%s\n' "$path"; return; }
@@ -17,69 +25,123 @@ cmdline_path() {
   echo "Raspberry Pi cmdline.txt not found" >&2
   return 1
 }
-
-switch_to() {
-  uuid="$1"
-  case "$uuid" in "$ROOT_A"|"$ROOT_B") ;; *) echo "Invalid root slot UUID" >&2; return 1;; esac
+write_cmdline() {
+  uuid="$1" destination="$2"
+  valid_slot "$uuid"
   path="$(cmdline_path)"
-  mount -o remount,rw /boot
-  trap 'mount -o remount,ro /boot 2>/dev/null || true' EXIT INT TERM
-  sed "s/root=PARTUUID=[^ ]*/root=PARTUUID=$uuid/" "$path" > "$path.new"
-  chmod 0644 "$path.new"
+  grep -Eq '(^| )root=PARTUUID=[^ ]+' "$path" || return 1
+  sed "s/root=PARTUUID=[^ ]*/root=PARTUUID=$uuid/" "$path" > "$destination.new"
+  chmod 0644 "$destination.new"
   sync
-  mv -f "$path.new" "$path"
+  mv -f "$destination.new" "$destination"
+  sync
+}
+boot_rw() {
+  mount -o remount,rw /boot
+  trap 'mount -o remount,ro /boot 2>/dev/null || true' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+}
+boot_ro() {
   sync
   mount -o remount,ro /boot
   trap - EXIT INT TERM
 }
 
-mkdir -p "$STATE"
+# These commands must work even when /data cannot mount during a trial boot.
 case "${1:-}" in
-  current)
-    current_uuid
+  current) current_uuid; exit 0;;
+  default) default_uuid; exit 0;;
+  boot-failed|boot-timeout)
+    if is_trial && [ ! -e /run/livi-os-confirmed ]; then
+      echo "Unconfirmed trial failed; rebooting to the unchanged default root" >&2
+      reboot -f
+    fi
+    exit 0
     ;;
-  switch)
-    switch_to "${2:?slot UUID required}"
+esac
+
+mkdir -p "$STATE"
+exec 8>/run/livi-os-slot.lock
+flock -x 8
+case "${1:-}" in
+  stage)
+    target="${2:?slot UUID required}"
+    expected="${3:?image hash required}"
+    valid_slot "$target"
+    current="$(current_uuid)"
+    valid_slot "$current"
+    [ "$(default_uuid)" = "$current" ] || { echo "Confirm the active trial before staging another root" >&2; exit 1; }
+    [ "$current" != "$target" ] || { echo "Refusing to stage the active root" >&2; exit 1; }
+    [ ! -e "$PENDING" ] || { echo "An OS update is already pending" >&2; exit 1; }
+    # Never change the default cmdline before successful validation.
+    boot_rw
+    write_cmdline "$target" /boot/cmdline-tryboot.txt
+    printf '[all]\ninclude config.txt\n[all]\ncmdline=cmdline-tryboot.txt\n' > /boot/tryboot.txt.new
+    sync
+    mv -f /boot/tryboot.txt.new /boot/tryboot.txt
+    boot_ro
+    printf '%s\n%s\n0\n%s\n' "$target" "$current" "$expected" > "$PENDING.new"
+    sync
+    mv -f "$PENDING.new" "$PENDING"
+    sync
+    ;;
+  reboot)
+    [ -f "$PENDING" ] || { echo "No staged update" >&2; exit 1; }
+    target="$(sed -n '1p' "$PENDING")"
+    previous="$(sed -n '2p' "$PENDING")"
+    valid_slot "$target"
+    [ "$(current_uuid)" = "$previous" ] || { echo "Not running the previous root" >&2; exit 1; }
+    # Persist the attempt before handing over to firmware, so even failures
+    # before userspace can be recognized when the default root returns.
+    sed '3s/.*/1/' "$PENDING" > "$PENDING.new"
+    sync
+    mv -f "$PENDING.new" "$PENDING"
+    sync
+    reboot '0 tryboot'
     ;;
   boot-check)
     [ -f "$PENDING" ] || exit 0
     target="$(sed -n '1p' "$PENDING")"
     previous="$(sed -n '2p' "$PENDING")"
-    attempts="$(sed -n '3p' "$PENDING")"
-    case "$attempts" in ''|*[!0-9]*) attempts=0;; esac
-    [ "$(current_uuid)" = "$target" ] || exit 0
-    attempts=$((attempts + 1))
-    if [ "$attempts" -gt 3 ]; then
-      echo "OS slot $target failed three boots; restoring $previous" >&2
-      switch_to "$previous"
+    attempted="$(sed -n '3p' "$PENDING")"
+    current="$(current_uuid)"
+    valid_slot "$target"
+    valid_slot "$previous"
+    if [ "$current" = "$previous" ] && [ "$attempted" = 1 ]; then
       mv -f "$PENDING" "$STATE/failed-$(date +%s)"
       sync
-      reboot -f
-      exit 0
+      echo "Returned to previous root after unconfirmed trial" >&2
+    elif [ "$current" = "$target" ]; then
+      is_trial || { echo "Candidate did not boot through tryboot" >&2; exit 1; }
     fi
-    printf '%s\n%s\n%s\n' "$target" "$previous" "$attempts" > "$PENDING.new"
-    sync
-    mv -f "$PENDING.new" "$PENDING"
-    sync
-    ;;
-  boot-failed)
-    [ -f "$PENDING" ] || exit 0
-    [ "$(current_uuid)" = "$(sed -n '1p' "$PENDING")" ] || exit 0
-    sync
-    reboot -f
     ;;
   mark-good)
+    if [ -f "$PENDING" ]; then
+      current="$(current_uuid)"
+      [ "$current" = "$(sed -n '1p' "$PENDING")" ] || exit 0
+      is_trial || { echo "Refusing to commit a non-trial candidate" >&2; exit 1; }
+      boot_rw
+      write_cmdline "$current" "$(cmdline_path)"
+      boot_ro
+      printf '%s\n' "$current" > "$STATE/good-slot.new"
+      sync
+      mv -f "$STATE/good-slot.new" "$STATE/good-slot"
+      rm -f "$PENDING"
+      sync
+    fi
+    touch /run/livi-os-confirmed
+    ;;
+  cancel)
     [ -f "$PENDING" ] || exit 0
-    current="$(current_uuid)"
-    [ "$current" = "$(sed -n '1p' "$PENDING")" ] || exit 0
-    printf '%s\n' "$current" > "$STATE/good-slot.new"
-    sync
-    mv -f "$STATE/good-slot.new" "$STATE/good-slot"
-    rm -f "$PENDING"
+    [ "$(current_uuid)" != "$(sed -n '1p' "$PENDING")" ] || {
+      echo "Reboot to the previous root before cancelling a running trial" >&2; exit 1;
+    }
+    mv -f "$PENDING" "$STATE/cancelled-$(date +%s)"
     sync
     ;;
   *)
-    echo "usage: livi-os-slot {current|switch UUID|boot-check|boot-failed|mark-good}" >&2
+    echo "usage: livi-os-slot {current|default|stage UUID HASH|reboot|boot-check|boot-failed|boot-timeout|mark-good|cancel}" >&2
     exit 2
     ;;
 esac

@@ -1,4 +1,5 @@
 [Unit]
+OnFailure=livi-boot-failed.service
 Description=Expand LIVI_DATA into unused media space
 Requires=data.mount
 After=data.mount

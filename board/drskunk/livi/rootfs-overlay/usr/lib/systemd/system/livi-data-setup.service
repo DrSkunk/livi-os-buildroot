@@ -1,4 +1,5 @@
 [Unit]
+OnFailure=livi-boot-failed.service
 Description=Prepare LIVI persistent writable state
 Requires=data.mount livi-data-grow.service
 After=data.mount livi-data-grow.service local-fs.target

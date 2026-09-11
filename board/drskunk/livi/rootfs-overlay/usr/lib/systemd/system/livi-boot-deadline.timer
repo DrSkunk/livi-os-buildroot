@@ -1,0 +1,12 @@
+[Unit]
+Description=Limit unconfirmed OS trial startup to three minutes
+DefaultDependencies=no
+Before=timers.target
+
+[Timer]
+OnBootSec=180
+AccuracySec=1s
+Unit=livi-boot-deadline.service
+
+[Install]
+WantedBy=sysinit.target

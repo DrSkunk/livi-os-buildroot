@@ -40,7 +40,7 @@ Apple MFi authentication coprocessor.
 
 ## Host requirements
 
-A Linux build host with Git, GNU Make, GCC, `curl`, `readelf`, and normal
+An x86-64 Linux build host (required by the prebuilt Bootlin toolchain) with Git, GNU Make, GCC, `curl`, `readelf`, and normal
 Buildroot host prerequisites is required. Expect a substantial first build: the
 LIVI AppImage is approximately 307 MiB and the graphics/audio stack is compiled
 from source.
@@ -74,13 +74,17 @@ Validate both Buildroot defconfigs and shell syntax with:
 
 ```sh
 make check
+python3 support/test-runtime.py
 ```
+
+Recovery tests require Python 3, Bash and `jq`. `make check` resolves the
+x86-64 CI configuration on any host; it does not compile or boot an image.
 
 ## Continuous integration and releases
 
 GitHub Actions builds the Pi 4 and Pi 5 images in parallel on every push to
 `main`. Buildroot downloads and a board-specific 2 GiB compiler cache are kept
-between runs. Main-branch builds warm those caches but do not publish images.
+between runs. Main-branch builds publish images to the rolling `nightly` release.
 
 Push a semantic version tag to create a release:
 
@@ -122,20 +126,22 @@ with HDMI video and five-point USB capacitive touch. Connect the LCD's HDMI
 input to the Pi's HDMI0 port (`HDMI-A-1`, nearest the USB-C power connector),
 and its TOUCH port to a Pi USB port before powering on.
 
-The kernel command line selects the native portrait mode, `400x1280@60`, on
-`HDMI-A-1`. KMS uses the panel's EDID for its detailed timings; keep the HDMI
-cable connected at boot. USB HID multitouch and libinput provide touch input.
-The previous DSI panel drivers and automatic DSI detection are disabled.
+The desktop is **1280×400 landscape**. HDMI still scans out the panel's native
+400×1280 mode; the Cage hardware patch applies a 90° output transform at startup
+and after reconnection. USB touch devices map to `HDMI-A-1`, so wlroots applies
+the same transform to touch coordinates. Do not add a separate libinput
+calibration rotation: that would rotate touches twice. HDMI1 is disabled by Cage.
+The console uses `fbcon=rotate:1` independently of the application.
 
-These images use full KMS on both Pi models. The wiki's legacy `hdmi_group`,
-`hdmi_mode` and `hdmi_timings` firmware settings are not used. If the native
-mode is missing, check the HDMI connection and EDID before trying a generic
-CVT mode: its timings differ from this panel's vendor timings.
+Both Pi images use full KMS and the panel's EDID for detailed timings. The wiki's
+legacy `hdmi_group`, `hdmi_mode` and `hdmi_timings` settings are not used. Connect
+HDMI and USB before boot; if the native mode is missing, inspect the EDID and
+cable rather than substituting generic CVT timings. The previous DSI panel
+configuration and automatic DSI detection are disabled.
 
-The default orientation keeps display and touch in their native coordinates.
-For a landscape installation, configure rotation in the Wayland compositor
-and verify touch alignment; the wiki's console `video=...,rotate=90` option
-alone does not configure the Cage application output.
+The startup health check verifies the compositor's active native mode, 90°
+transform and scale, plus the PipeWire/PulseAudio sockets. Verify all four touch
+corners on the physical panel before installation.
 
 ## Disk layout and power-loss behaviour
 
@@ -172,9 +178,15 @@ Important persistent paths:
 ```
 
 LIVI-required mutable system configuration (`/etc/bluetooth`, NetworkManager
-profiles, LIVI udev rules and locally generated systemd units) is seeded from the
-immutable root and bind-mounted from `/data`. The remainder of `/etc` stays
-read-only.
+profiles, LIVI udev rules and locally generated systemd units) is bind-mounted
+from `/data`. Factory configuration is migrated before mounting: untouched
+files follow new defaults, obsolete untouched files are removed, and local edits
+or deletions are preserved. The baseline is stored under `/data/etc-defaults`.
+Conflicting new defaults are saved under each directory's `incoming/<revision>`
+folder and listed in `conflicts.json`. Review these conflicts during OS upgrades.
+Legacy installations without a baseline retain their existing files and receive
+conflict proposals instead of having potentially customized files overwritten.
+The same migration supports returning to an older OS's defaults after rollback.
 
 ## LIVI updates and rollback
 
@@ -228,13 +240,13 @@ factory image as the initial known-good version.
 
 ## Operating-system A/B updates
 
-The disk contains two equal SquashFS root slots. Normal boots use slot A; an OS
+The disk contains two equal SquashFS root slots. The initial default is slot A; an OS
 update is written only to the inactive slot. Provision an RSA or EC public key at
 `/data/os-update/trusted.pem`, then install a signed SquashFS image with:
 
 ```sh
 livi-os-update /data/os-update/rootfs.squashfs /data/os-update/rootfs.sig
-reboot
+livi-os-slot reboot
 ```
 
 Sign on a trusted development machine with the corresponding private key:
@@ -244,28 +256,46 @@ openssl dgst -sha256 -sign release-private.pem \
   -out rootfs.sig rootfs.squashfs
 ```
 
-The updater verifies the signature, writes the inactive partition, hashes the
-bytes back from the block device, atomically changes `cmdline.txt`, and records
-the previous slot. A candidate is committed only after LIVI, Cage and the Wayland
-socket survive the health window without fatal startup diagnostics. Failed boots
-are retried three times and then switch back to the previous root.
+The updater takes a private snapshot, verifies its signature, checks that its
+boot fingerprint matches the installed kernel/DTBs/boot configuration, writes
+the inactive root and verifies every byte by hash. Concurrent updates and updates
+from an unconfirmed root are rejected. Kernel or boot-configuration changes
+require installing a complete disk image; the root-only updater cannot replace
+the shared boot artifacts safely.
 
-The boot FAT filesystem is read-only during normal operation and remounted only
-while changing slots. This userspace rollback covers failures that reach systemd;
-it cannot recover a kernel that fails before userspace. Adding U-Boot bootcount
-or Raspberry Pi tryboot support would be required for that final failure class.
+Staging writes `cmdline-tryboot.txt` and `tryboot.txt`, leaving the normal
+`cmdline.txt` unchanged. `livi-os-slot reboot` requests a one-shot Raspberry Pi
+trial boot. An ordinary reboot does not start the trial. The new root becomes
+the default only after 60 consecutive successful application/display/audio
+health checks, with an initial startup allowance of 60 seconds. A failed trial
+returns to the previous default on reset, including failures before userspace.
+Use `livi-os-slot cancel` from the previous root to discard a staged update.
+
+Critical service failures and an unconfirmed trial's three-minute boot deadline
+request a reset. Both images enable `kernel_watchdog_timeout=120` and systemd's
+runtime watchdog; `panic=10` also reboots after a kernel panic. Provision a current
+Pi EEPROM with `BOOT_WATCHDOG_TIMEOUT=120` for watchdog coverage before the kernel
+starts. This EEPROM setting is separate from the disk image and must be verified
+on the board. See the [Raspberry Pi tryboot/watchdog documentation](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html).
+
+The boot FAT filesystem is remounted writable only while staging or confirming.
+Its shared firmware and FAT metadata are still a single point of failure: trial
+boot does not protect against media corruption or a power cut damaging FAT during
+confirmation. Test reset and power-loss recovery on the deployment hardware.
 
 ## Configuration recovery
 
 `livi-config-guard` validates LIVI's JSON every five seconds and stores the last
-valid copy using copy/sync/atomic-rename. On startup, a truncated or malformed
-configuration is restored automatically. It does not overwrite a valid older
+valid copy using copy/sync/atomic-rename. On startup, a missing, truncated or malformed
+configuration is restored automatically with ownership returned to LIVI. It does not overwrite a valid older
 configuration merely because its schema changed; LIVI remains responsible for
 schema migration.
 
 Systemd feeds the BCM2835 hardware watchdog with a 15-second runtime deadline.
-The journal is volatile, rate-limited and capped at 24 MiB; LIVI's persistent log
-rotates at 4 MiB. These bounds prevent logs from exhausting the data partition.
+The journal is volatile, rate-limited and capped at 24 MiB. A dedicated log
+writer continuously rotates LIVI output at 4 MiB, retaining one previous file
+(8 MiB total), including output without newline characters. Startup fatal
+messages are tracked separately so rotation cannot erase a failed health check.
 
 ## Diagnostics
 

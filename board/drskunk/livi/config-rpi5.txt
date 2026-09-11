@@ -11,3 +11,5 @@ dtparam=audio=on
 dtparam=i2c_arm=on
 dtparam=pciex1
 dtoverlay=i2c-gpio,bus=2,i2c_gpio_sda=19,i2c_gpio_scl=26,i2c_gpio_delay_us=5
+# Keep the watchdog active until systemd takes over.
+kernel_watchdog_timeout=120

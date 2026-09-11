@@ -1,0 +1,7 @@
+[Unit]
+Description=Return an unconfirmed OS trial to the previous root
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/livi-os-slot boot-failed

@@ -1,4 +1,5 @@
 [Unit]
+OnFailure=livi-boot-failed.service
 Description=WirePlumber policy manager for LIVI
 Requires=livi-pipewire.service
 After=livi-pipewire.service
@@ -6,8 +7,11 @@ After=livi-pipewire.service
 [Service]
 User=livi
 Environment=HOME=/home/livi
+Environment=XDG_STATE_HOME=/data/livi/state
+Environment=XDG_CACHE_HOME=/data/livi/cache
+Environment=XDG_CONFIG_HOME=/data/livi/config
 Environment=XDG_RUNTIME_DIR=/run/user/1000
-ExecStart=/usr/bin/wireplumber
+ExecStart=/usr/bin/wireplumber --profile main-systemwide
 Restart=on-failure
 
 [Install]

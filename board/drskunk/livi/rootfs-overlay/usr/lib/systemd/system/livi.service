@@ -1,4 +1,5 @@
 [Unit]
+OnFailure=livi-boot-failed.service
 Description=LIVI automotive kiosk with update rollback
 Requires=livi-data-setup.service livi-os-slot.service livi-pipewire.service livi-pipewire-pulse.service livi-wireplumber.service seatd.service
 After=livi-data-setup.service livi-os-slot.service livi-pipewire.service livi-pipewire-pulse.service livi-wireplumber.service seatd.service
@@ -9,7 +10,7 @@ StartLimitBurst=4
 [Service]
 Type=simple
 ExecStart=/usr/bin/livi-supervisor
-Restart=on-failure
+Restart=always
 RestartSec=3
 TTYPath=/dev/tty1
 StandardInput=tty

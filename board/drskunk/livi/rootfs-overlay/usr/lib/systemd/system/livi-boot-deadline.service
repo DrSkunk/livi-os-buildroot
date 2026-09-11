@@ -1,0 +1,7 @@
+[Unit]
+Description=Reject an OS trial that never became healthy
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/livi-os-slot boot-timeout

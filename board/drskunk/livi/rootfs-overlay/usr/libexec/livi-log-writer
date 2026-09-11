@@ -1,0 +1,51 @@
+#!/usr/bin/python3
+"""Bound kiosk output on disk, including streams without newline characters."""
+import os
+from pathlib import Path
+import re
+import sys
+
+LIMIT = 4 * 1024 * 1024
+FATAL = re.compile(rb"fatal error|failed to initialize (?:gstreamer|wayland)|segmentation fault|render process gone", re.I)
+
+
+def capture(stream, path, fatal_path, limit=LIMIT):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    previous = path.with_name(path.name + ".1")
+    # Bring a legacy oversized log back within the bound on first startup.
+    for existing in (path, previous):
+        if existing.exists() and existing.stat().st_size > limit:
+            with existing.open("rb") as old:
+                old.seek(-limit, os.SEEK_END)
+                retained = old.read(limit)
+            existing.write_bytes(retained)
+    size = path.stat().st_size if path.exists() else 0
+    tail = b""
+    output = path.open("ab", buffering=0)
+    try:
+        while True:
+            chunk = os.read(stream.fileno(), 65536)
+            if not chunk:
+                break
+            if FATAL.search(tail + chunk):
+                Path(fatal_path).touch()
+            tail = (tail + chunk)[-128:]
+            while chunk:
+                if size >= limit:
+                    # The writer owns the descriptor, so rotation never leaves
+                    # Cage writing to an unlinked file or needs copytruncate.
+                    output.close()
+                    os.replace(path, previous)
+                    output = path.open("ab", buffering=0)
+                    size = 0
+                count = min(len(chunk), limit - size)
+                output.write(chunk[:count])
+                chunk = chunk[count:]
+                size += count
+    finally:
+        output.close()
+
+
+if __name__ == "__main__":
+    capture(sys.stdin.buffer, sys.argv[1], sys.argv[2])

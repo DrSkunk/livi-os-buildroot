@@ -4,7 +4,11 @@ set -eu
 root="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 failed=0
 
-for script in $(find "$root/board" "$root/support" -type f \( -name '*.sh' -o -path '*/init.d/*' -o -path '*/usr/bin/livi-*' -o -name 'fetch-livi' -o -name 'check-project' \)); do
+for script in $(find "$root/board" "$root/support" -type f \( -name '*.sh' -o -path '*/init.d/*' -o -path '*/usr/bin/livi-*' -o -path '*/usr/libexec/livi-*' -o -name 'fetch-livi' -o -name 'check-project' \)); do
+  if head -n1 "$script" | grep -q python3; then
+    python3 -c 'import ast, pathlib, sys; ast.parse(pathlib.Path(sys.argv[1]).read_text())' "$script" || failed=1
+    continue
+  fi
   if ! sh -n "$script" 2>/dev/null; then
     # Bash scripts may intentionally use arrays or arithmetic-for.
     if ! bash -n "$script"; then
@@ -47,10 +51,22 @@ for symbol in CONFIG_DRM_VC4 CONFIG_INPUT_EVDEV CONFIG_HID CONFIG_HID_GENERIC CO
   }
 done
 
+grep -q '^livi 1000 livi 1000 ' "$root/board/drskunk/livi/users.txt" || {
+  echo "LIVI UID/GID must match /run/user/1000" >&2
+  failed=1
+}
+
 for board in pi4 pi5; do
   echo "Validating $board defconfig"
-  make -s -C "$root" "${board}_defconfig"
-  test -f "$root/output/$board/.config" || failed=1
+  make -s -C "$root" "${board}_defconfig" HOSTARCH=x86_64
+  # Validate the CI host configuration even when this check runs on ARM/macOS.
+  # Kconfig otherwise silently drops Bootlin, glibc, systemd and LIVI.
+  for symbol in BR2_TOOLCHAIN_EXTERNAL_BOOTLIN BR2_TOOLCHAIN_USES_GLIBC BR2_INIT_SYSTEMD BR2_PACKAGE_LIVI BR2_PACKAGE_BASH BR2_PACKAGE_COREUTILS BR2_PACKAGE_SQUASHFS BR2_PACKAGE_SQUASHFS_XZ BR2_PACKAGE_CAGE BR2_PACKAGE_WIREPLUMBER; do
+    grep -qx "$symbol=y" "$root/output/$board/.config" || {
+      echo "missing resolved runtime dependency: $board $symbol" >&2
+      failed=1
+    }
+  done
 done
 
 if command -v shellcheck >/dev/null 2>&1; then

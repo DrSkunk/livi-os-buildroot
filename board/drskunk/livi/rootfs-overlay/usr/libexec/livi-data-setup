@@ -2,24 +2,23 @@
 set -eu
 
 [ -e /data/.livi-data ] || { echo "LIVI_DATA marker missing" >&2; exit 1; }
-mkdir -p /data/livi/app /data/livi/config /data/livi/cache /data/livi/log /data/livi/update \
+mkdir -p /data/livi/app /data/livi/config /data/livi/cache /data/livi/state /data/livi/log /data/livi/update \
   /data/os-update /data/games/roms /data/games/saves /data/games/states \
   /data/games/retroarch/cores /data/games/retroarch/playlists /data/games/retroarch/thumbnails \
   /data/bluetooth /data/network/system-connections /data/etc/systemd/system \
   /data/etc/bluetooth /data/etc/minidsp /data/etc/udev/rules.d /run/user/1000
 
-seed_dir() {
-  source="$1" destination="$2"
-  if [ ! -e "$destination/.seeded" ]; then
-    cp -a "$source/." "$destination/" 2>/dev/null || true
-    touch "$destination/.seeded"
+merge_dir() {
+  source="$1" destination="$2" name="$3"
+  if ! mountpoint -q "$source"; then
+    /usr/libexec/livi-merge-defaults "$source" "$destination" "/data/etc-defaults/$name"
   fi
 }
 
-seed_dir /etc/bluetooth /data/etc/bluetooth
-seed_dir /etc/minidsp /data/etc/minidsp
-seed_dir /etc/udev/rules.d /data/etc/udev/rules.d
-seed_dir /etc/systemd/system /data/etc/systemd/system
+merge_dir /etc/bluetooth /data/etc/bluetooth bluetooth
+merge_dir /etc/minidsp /data/etc/minidsp minidsp
+merge_dir /etc/udev/rules.d /data/etc/udev/rules.d udev
+merge_dir /etc/systemd/system /data/etc/systemd/system systemd
 
 mountpoint -q /var/lib/bluetooth || mount --bind /data/bluetooth /var/lib/bluetooth
 mountpoint -q /etc/bluetooth || mount --bind /data/etc/bluetooth /etc/bluetooth
@@ -33,3 +32,7 @@ ln -snf /data/games/retroarch /data/livi/config/retroarch
 chown -R livi:livi /data/livi /data/games /run/user/1000
 chmod 0700 /run/user/1000 /data/network/system-connections
 chmod 0750 /data/livi/app /data/livi/config /data/livi/update
+
+# Re-read migrated units/rules after mounting their persistent directories.
+systemctl daemon-reload
+udevadm control --reload

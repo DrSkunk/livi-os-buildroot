@@ -1,4 +1,5 @@
 [Unit]
+OnFailure=livi-boot-failed.service
 Description=Track LIVI A/B operating-system boot attempts
 Requires=livi-data-setup.service
 After=livi-data-setup.service

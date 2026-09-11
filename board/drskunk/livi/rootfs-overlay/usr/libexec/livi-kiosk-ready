@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+export XDG_RUNTIME_DIR=/run/user/1000
+export WAYLAND_DISPLAY=wayland-0
+[ -S "$XDG_RUNTIME_DIR/pipewire-0" ]
+[ -S "$XDG_RUNTIME_DIR/pulse/native" ]
+# Check the actual compositor mode, not just modes advertised in EDID.
+timeout 3 wlr-randr --json | jq -e '
+  [.[] | select(.name == "HDMI-A-1" and .enabled == true and .transform == "90" and .scale == 1)
+   | .modes[] | select(.current == true and .width == 400 and .height == 1280)]
+  | length == 1' >/dev/null
