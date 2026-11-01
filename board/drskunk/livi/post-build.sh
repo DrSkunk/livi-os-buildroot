@@ -18,7 +18,7 @@ chmod 0755 "$TARGET"/usr/bin/livi-* 2>/dev/null || true
 chmod 0755 "$TARGET"/usr/libexec/livi-*
 chmod 0440 "$TARGET/etc/sudoers.d/99-livi"
 mkdir -p "$TARGET/data" "$TARGET/home/livi" "$TARGET/var/lib"
-mkdir -p "$TARGET/var/lib/bluetooth" "$TARGET/etc/bluetooth" \
+mkdir -p "$TARGET/var/lib/bluetooth" "$TARGET/var/lib/systemd/timesync" "$TARGET/etc/bluetooth" \
   "$TARGET/etc/udev/rules.d" "$TARGET/etc/NetworkManager/system-connections"
 ln -snf /data/livi/config "$TARGET/home/livi/.config"
 ln -snf /data/games "$TARGET/home/livi/Games"

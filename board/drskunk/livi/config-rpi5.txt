@@ -11,5 +11,9 @@ dtparam=audio=on
 dtparam=i2c_arm=on
 dtparam=pciex1
 dtoverlay=i2c-gpio,bus=2,i2c_gpio_sda=19,i2c_gpio_scl=26,i2c_gpio_delay_us=5
+# On-board RTC backup battery. Uncomment ONLY with the official rechargeable
+# Raspberry Pi RTC battery (Panasonic ML-2020 lithium-manganese). Never enable
+# charging with a non-rechargeable cell such as a CR2032.
+#dtparam=rtc_bbat_vchg=3000000
 # Keep the watchdog active until systemd takes over.
 kernel_watchdog_timeout=120

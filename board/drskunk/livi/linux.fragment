@@ -54,3 +54,14 @@ CONFIG_MAGIC_SYSRQ=y
 CONFIG_DRM_FBDEV_EMULATION=y
 CONFIG_FRAMEBUFFER_CONSOLE=y
 CONFIG_FRAMEBUFFER_CONSOLE_ROTATION=y
+# Real-time clock: restore system time from the RTC at boot (hctosys) and write
+# NTP-synced time back to it (systohc). Drivers are built in because hctosys
+# runs before modules load. Pi 5 has an on-board RTC (needs the backup battery);
+# DS1307/DS3231 covers an optional add-on module on the Pi 4 test rig.
+CONFIG_RTC_CLASS=y
+CONFIG_RTC_HCTOSYS=y
+CONFIG_RTC_HCTOSYS_DEVICE="rtc0"
+CONFIG_RTC_SYSTOHC=y
+CONFIG_RTC_SYSTOHC_DEVICE="rtc0"
+CONFIG_RTC_DRV_RPI=y
+CONFIG_RTC_DRV_DS1307=y
