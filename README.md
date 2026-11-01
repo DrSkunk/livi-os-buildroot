@@ -188,6 +188,34 @@ Legacy installations without a baseline retain their existing files and receive
 conflict proposals instead of having potentially customized files overwritten.
 The same migration supports returning to an older OS's defaults after rollback.
 
+## Clock and time sync
+
+LIVI's sunrise/sunset night mode needs a correct wall clock, and only switches
+day/night once the clock is confirmed by an RTC or NTP.
+
+| Board | Time source at boot | Notes |
+|---|---|---|
+| Pi 5 | On-board RTC (`rtc0`) via kernel `hctosys` | Needs the RTC backup battery; without it the RTC resets on power-off |
+| Pi 4 | Last synced time from `systemd-timesyncd` | No RTC; time is stale until NTP syncs over Wi-Fi/hotspot |
+
+- The kernel restores system time from the RTC at boot (`CONFIG_RTC_HCTOSYS`)
+  and writes NTP-synced time back to it (`CONFIG_RTC_SYSTOHC`).
+- `systemd-timesyncd` syncs via NTP whenever a network is available. Its state
+  (`/var/lib/systemd/timesync`) is bind-mounted from `/data/timesync`.
+- Pi 5 battery charging is off by default. With the official rechargeable
+  ML-2020 battery, uncomment `dtparam=rtc_bbat_vchg=3000000` in
+  `board/drskunk/livi/config-rpi5.txt`. Never charge a CR2032.
+- Pi 4 test rig: either keep Wi-Fi up for NTP or pick Day/Night manually in
+  LIVI. An optional DS3231 module can be enabled in `config-rpi4.txt`.
+
+Check on the device:
+
+```sh
+timedatectl                       # "System clock synchronized: yes"
+cat /sys/class/rtc/rtc0/since_epoch
+ls /run/systemd/timesync/synchronized
+```
+
 ## LIVI updates and rollback
 
 LIVI discovers the stable or nightly GitHub release itself. Its Linux updater:
