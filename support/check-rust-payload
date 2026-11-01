@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+"""Reject incompatible Rust AppImage layouts before building the OS."""
+from pathlib import Path
+import hashlib
+import struct
+import subprocess
+import sys
+import tempfile
+
+
+BINARIES = ("livi-ui", "resources/core/livi-core",
+            "resources/compositor/livi-compositor", "resources/gst-host/livi-gst-host",
+            "resources/driver/livi-helperd")
+RESOURCES = ("resources/livi-os-helper-api", "resources/99-LIVI.rules.template",
+             "resources/livi-touch-filter")
+
+
+def regular_file(root, relative):
+    path = root / relative
+    for component in (Path(relative), *Path(relative).parents):
+        if (root / component).is_symlink():
+            raise ValueError(f"symlink in required payload path: {relative}")
+    if not path.is_file():
+        raise ValueError(f"missing regular payload resource: {relative}")
+    return path
+
+
+def check(root):
+    root = root.absolute()
+    if root.is_symlink():
+        raise ValueError("payload root must not be a symlink")
+    marker = regular_file(root, "resources/livi-os-helper-api")
+    if marker.read_text().strip() != "2":
+        raise ValueError("Rust AppImage must implement LIVI OS API 2")
+    for relative in BINARIES:
+        path = regular_file(root, relative)
+        if path.stat().st_mode & 0o111 == 0:
+            raise ValueError(f"missing regular executable: {relative}")
+        with path.open("rb") as stream:
+            header = stream.read(20)
+        if (len(header) != 20 or header[:6] != b"\x7fELF\x02\x01"
+                or struct.unpack_from("<H", header, 18)[0] != 183):
+            raise ValueError(f"expected a Linux AArch64 ELF executable: {relative}")
+    for relative in RESOURCES:
+        regular_file(root, relative)
+
+
+def check_appimage(image):
+    with image.open("rb") as stream:
+        header = stream.read(64)
+    if (len(header) != 64 or header[:6] != b"\x7fELF\x02\x01"
+            or header[8:11] != b"AI\x02"
+            or struct.unpack_from("<H", header, 18)[0] != 183):
+        raise ValueError("expected an ARM64 type-2 AppImage")
+    offset = (struct.unpack_from("<Q", header, 40)[0]
+              + struct.unpack_from("<H", header, 58)[0]
+              * struct.unpack_from("<H", header, 60)[0])
+    if not 64 <= offset < image.stat().st_size:
+        raise ValueError("invalid AppImage filesystem offset")
+    with tempfile.TemporaryDirectory(prefix="livi-api2-") as directory:
+        extracted = Path(directory) / "app"
+        subprocess.run(["unsquashfs", "-no-progress", "-d", str(extracted),
+                        "-o", str(offset), str(image), *BINARIES, *RESOURCES], check=True)
+        check(extracted)
+
+
+if __name__ == "__main__":
+    try:
+        if len(sys.argv) == 3 and sys.argv[1] == "--appimage":
+            image = Path(sys.argv[2])
+            expected = Path(f"{image}.sha256").read_text().split()[0]
+            with image.open("rb") as stream:
+                actual = hashlib.file_digest(stream, "sha256").hexdigest()
+            if expected != actual:
+                raise ValueError("AppImage checksum mismatch")
+            check_appimage(image)
+        elif len(sys.argv) == 2:
+            check(Path(sys.argv[1]))
+        else:
+            raise ValueError("usage: check-rust-payload [--appimage] PATH")
+    except (OSError, ValueError, IndexError, subprocess.CalledProcessError) as error:
+        sys.exit(f"check-rust-payload: {error}")

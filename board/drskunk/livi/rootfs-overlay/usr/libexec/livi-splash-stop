@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+
+[ -p /run/psplash_fifo ] || exit 0
+exec /usr/bin/timeout 2 /usr/bin/psplash-write QUIT

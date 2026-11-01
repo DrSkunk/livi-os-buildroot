@@ -30,8 +30,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            bc bison build-essential cpio file flex gettext git libncurses-dev \
-            libssl-dev jq python3 rsync unzip wget xz-utils
+            bc bison build-essential ca-certificates cpio curl file flex gettext git libncurses-dev \
+            libssl-dev jq python3 rsync squashfs-tools unzip wget xz-utils
 
       - name: Bootstrap Buildroot
         run: make bootstrap
@@ -95,8 +95,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            bc bison build-essential cpio file flex gettext git libncurses-dev \
-            libssl-dev jq python3 rsync unzip wget xz-utils
+            bc bison build-essential ca-certificates cpio curl file flex gettext git libncurses-dev \
+            libssl-dev jq python3 rsync squashfs-tools unzip wget xz-utils
 
       - name: Bootstrap Buildroot
         run: make bootstrap

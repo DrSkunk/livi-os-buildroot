@@ -3,5 +3,6 @@
 /dl/
 /.buildroot-ccache/
 /artifacts/*.AppImage
+/artifacts/livi-debug-authorized_keys
 *.img
 *.img.xz

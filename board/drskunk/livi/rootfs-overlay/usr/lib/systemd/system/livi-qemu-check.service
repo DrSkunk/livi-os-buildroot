@@ -1,0 +1,14 @@
+[Unit]
+Description=LIVI storage-only emulator smoke test
+ConditionKernelCommandLine=livi.qemu_test=1
+Requires=livi-data-setup.service
+After=livi-data-setup.service livi-ssh.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/livi-qemu-check
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

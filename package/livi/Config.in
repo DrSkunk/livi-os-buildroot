@@ -3,12 +3,25 @@ config BR2_PACKAGE_LIVI
 	depends on BR2_aarch64
 	depends on BR2_TOOLCHAIN_USES_GLIBC
 	depends on !BR2_STATIC_LIBS
+	depends on BR2_INSTALL_LIBSTDCPP
+	depends on BR2_TOOLCHAIN_HAS_THREADS
+	depends on BR2_PACKAGE_HAS_LIBEGL
 	select BR2_PACKAGE_BASH
 	select BR2_PACKAGE_CA_CERTIFICATES
 	select BR2_PACKAGE_LIBCURL
+	select BR2_PACKAGE_FONTCONFIG
+	select BR2_PACKAGE_DEJAVU
+	select BR2_PACKAGE_IPROUTE2
+	select BR2_PACKAGE_LIBXKBCOMMON
+	select BR2_PACKAGE_SEATD
+	select BR2_PACKAGE_LIBGUDEV
+	select BR2_PACKAGE_XKEYBOARD_CONFIG
 	help
-	  Installs a factory LIVI ARM64 AppImage. At runtime it is copied to
+	  Installs a Rust/Slint LIVI ARM64 AppImage implementing LIVI OS API 2.
+	  At runtime it is copied to
 	  the writable data partition so LIVI's atomic in-place updater works.
+	  Uses the application's direct DRM/KMS compositor, not Cage or Electron.
+	  The privileged Rust helper is installed separately on the immutable root.
 
 if BR2_PACKAGE_LIVI
 

@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+# KMS may register the framebuffer after early userspace has started.
+attempt=0
+while [ ! -c /dev/fb0 ]; do
+  attempt=$((attempt + 1))
+  if [ "$attempt" -ge 100 ]; then
+    echo "livi-splash: no framebuffer appeared within ten seconds" >&2
+    exit 1
+  fi
+  sleep 0.1
+done
+
+exec /usr/bin/psplash -n -a 90
