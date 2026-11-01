@@ -32,10 +32,10 @@ openssl dgst -sha256 -verify "$key" -signature "$signature" "$image"
 # The boot partition is shared. Reject roots built for another kernel/board.
 installed_boot="$(cat /usr/lib/livi/boot-id)"
 candidate_boot="$(unsquashfs -cat "$image" usr/lib/livi/boot-id)"
-[ -n "$installed_boot" ] && [ "$candidate_boot" = "$installed_boot" ] || {
+if [ -z "$installed_boot" ] || [ "$candidate_boot" != "$installed_boot" ]; then
   echo "Boot artifacts differ; this update requires a full-image installation" >&2
   exit 1
-}
+fi
 
 current="$(livi-os-slot current)"
 [ "$(livi-os-slot default)" = "$current" ] || {

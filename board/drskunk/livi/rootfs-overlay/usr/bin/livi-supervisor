@@ -65,6 +65,7 @@ fi
 runtime="$(mktemp -d /run/livi-supervisor.XXXXXX)" || exit 1
 fatal_log="$runtime/fatal"
 mkfifo "$runtime/output" || exit 1
+# shellcheck disable=SC2317,SC2329 # invoked indirectly via trap
 cleanup() {
   for pid in "${kiosk_pid:-}" "${guard_pid:-}" "${logger_pid:-}"; do
     [ -z "$pid" ] || kill "$pid" 2>/dev/null || true
