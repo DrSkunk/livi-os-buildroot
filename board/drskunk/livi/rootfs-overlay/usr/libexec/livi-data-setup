@@ -4,7 +4,7 @@ set -eu
 [ -e /data/.livi-data ] || { echo "LIVI_DATA marker missing" >&2; exit 1; }
 mkdir -p /data/livi/app /data/livi/config /data/livi/cache /data/livi/state /data/livi/log /data/livi/update \
   /data/os-update /data/games/roms /data/games/saves /data/games/states \
-  /data/games/retroarch/cores /data/games/retroarch/playlists /data/games/retroarch/thumbnails \
+  /data/games/retroarch/cores /data/games/retroarch/playlists /data/games/retroarch/thumbnails /data/games/retroarch/system \
   /data/bluetooth /data/timesync /data/network/system-connections /data/etc/systemd/system \
   /data/etc/bluetooth /data/etc/minidsp /data/etc/udev/rules.d /run/user/1000
 
@@ -19,6 +19,10 @@ merge_dir /etc/bluetooth /data/etc/bluetooth bluetooth
 merge_dir /etc/minidsp /data/etc/minidsp minidsp
 merge_dir /etc/udev/rules.d /data/etc/udev/rules.d udev
 merge_dir /etc/systemd/system /data/etc/systemd/system systemd
+if [ -d /usr/share/livi/games ]; then
+  merge_dir /usr/share/livi/games /data/games games
+fi
+/usr/libexec/livi-retroarch-setup
 
 mountpoint -q /var/lib/bluetooth || mount --bind /data/bluetooth /var/lib/bluetooth
 # systemd-timesyncd keeps its last-synced clock here; persisted so an offline

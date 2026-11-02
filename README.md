@@ -29,6 +29,28 @@ The immutable image includes Nestopia UE (NES), Snes9x (SNES), Gambatte
 core filenames from `/usr/lib/libretro`; ROMs, playlists, thumbnails, saves and
 user-installed cores remain writable under `/data/games`.
 
+RetroArch uses the `glcore` video driver and the touch-oriented **GLUI** menu,
+with bundled fonts/icons and touch-pointer navigation enabled. The legacy `gl`
+driver crashes during Wayland/EGL startup on the Pi. On the first boot after this
+update, existing settings are backed up as `retroarch.cfg.before-touch-v1` and
+the graphics/menu/input/asset settings are repaired once. Other settings,
+including custom save directories, are preserved; subsequent user edits are not
+reset on boot. Configuration lives in `/data/games/retroarch/retroarch.cfg`.
+
+The starter library includes **Red Rod Racing** (Game Boy, MIT) and **Tobu Tobu
+Girl** (Game Boy, MIT code / CC BY 4.0 assets). ROM downloads are pinned and
+SHA-256 verified, with attribution under `/usr/share/doc/livi-homebrew`.
+Red Rod Racing uses Start to begin, A to select/accelerate, and the D-pad to
+steer. Use a gamepad for gameplay; touch is for the menus.
+Standard Linux gamepad profiles are included. Press **Start + Select** together
+to open the RetroArch menu during a game, then choose **Quit RetroArch** to
+return to LIVI.
+
+In native LIVI, keep using the Games cards to launch games. **Add games → Browse**
+copies an extracted ROM from local storage or a mounted USB drive; **Rescan**
+imports ROMs placed directly in `/data/games/roms`. **Basic settings** opens
+LIVI's Games settings, while **RetroArch** opens the full emulator configuration.
+
 Genesis Plus GX is the core currently hard-coded by LIVI for both Genesis and
 Master System. Its upstream license is non-commercial. Do not distribute this
 core in a commercial product without separate permission; replace it and update
@@ -97,6 +119,11 @@ The workflow first creates a draft release, builds and validates both images,
 uploads XZ-compressed images and SHA-256 files, and publishes the release only
 after both parallel jobs succeed. If either board fails, the incomplete release
 remains a draft and can safely be retried; successful uploads use `--clobber`.
+
+Manual workflow runs can select `pi4`, `pi5` or both and a specific LIVI release
+tag (including prereleases). Every build uploads the compressed flashable image
+and checksum as a workflow artifact, without replacing the nightly release when
+building a topic branch.
 
 ## Flashing
 

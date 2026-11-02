@@ -5,9 +5,16 @@ TARGET="${1:?target directory missing}"
 
 # Fail image creation if Kconfig silently dropped a runtime dependency.
 for executable in bin/bash usr/bin/stat usr/bin/cage usr/bin/pipewire \
-  usr/bin/pipewire-pulse usr/bin/wireplumber usr/bin/wlr-randr usr/bin/jq usr/bin/unsquashfs; do
+  usr/bin/pipewire-pulse usr/bin/wireplumber usr/bin/wlr-randr usr/bin/jq usr/bin/unsquashfs usr/bin/retroarch; do
   [ -x "$TARGET/$executable" ] || {
     echo "Required runtime executable missing: /$executable" >&2
+    exit 1
+  }
+done
+
+for asset in glui/font.ttf glui/back.png ozone/regular.ttf; do
+  [ -s "$TARGET/usr/share/retroarch/assets/$asset" ] || {
+    echo "Required RetroArch menu asset missing: $asset" >&2
     exit 1
   }
 done

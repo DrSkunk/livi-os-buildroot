@@ -1,0 +1,21 @@
+{
+  "version": "1.5",
+  "default_core_path": "/usr/lib/libretro/gambatte_libretro.so",
+  "default_core_name": "Gambatte",
+  "items": [
+    {
+      "path": "/data/games/roms/gameboy/Red Rod Racing.gb",
+      "label": "Red Rod Racing",
+      "core_path": "/usr/lib/libretro/gambatte_libretro.so",
+      "core_name": "Gambatte",
+      "db_name": "Nintendo - Game Boy.lpl"
+    },
+    {
+      "path": "/data/games/roms/gameboy/Tobu Tobu Girl.gb",
+      "label": "Tobu Tobu Girl",
+      "core_path": "/usr/lib/libretro/gambatte_libretro.so",
+      "core_name": "Gambatte",
+      "db_name": "Nintendo - Game Boy.lpl"
+    }
+  ]
+}
