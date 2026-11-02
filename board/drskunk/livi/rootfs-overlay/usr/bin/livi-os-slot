@@ -153,9 +153,11 @@ case "${1:-}" in
       echo "Returned to previous root after unconfirmed trial" >&2
     elif [ "$current" = "$target" ]; then
       is_trial || { echo "Candidate did not boot through tryboot" >&2; exit 1; }
-      [ "$current_boot" = "$(boot_for_root "$target")" ] &&
-        [ "$current_boot" = "$(autoboot_partition tryboot)" ] ||
-        { echo "Candidate booted from the wrong boot partition" >&2; exit 1; }
+      if [ "$current_boot" != "$(boot_for_root "$target")" ] ||
+        [ "$current_boot" != "$(autoboot_partition tryboot)" ]; then
+        echo "Candidate booted from the wrong boot partition" >&2
+        exit 1
+      fi
     fi
     ;;
   mark-good)
@@ -164,9 +166,11 @@ case "${1:-}" in
       [ "$current" = "$(sed -n '1p' "$PENDING")" ] || exit 0
       is_trial || { echo "Refusing to commit a non-trial candidate" >&2; exit 1; }
       current_boot="$(current_boot_partition)"
-      [ "$current_boot" = "$(boot_for_root "$current")" ] &&
-        [ "$current_boot" = "$(autoboot_partition tryboot)" ] ||
-        { echo "Refusing to commit a candidate from the wrong boot partition" >&2; exit 1; }
+      if [ "$current_boot" != "$(boot_for_root "$current")" ] ||
+        [ "$current_boot" != "$(autoboot_partition tryboot)" ]; then
+        echo "Refusing to commit a candidate from the wrong boot partition" >&2
+        exit 1
+      fi
       default_boot="$(autoboot_partition all)"
       write_autoboot "$current_boot" "$default_boot"
       printf '%s\n' "$current" > "$STATE/good-slot.new"

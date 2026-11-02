@@ -34,7 +34,10 @@ field() { sed -n "s/^$1=//p" "$tmp/os-release"; }
 board="$(field BOARD)"
 version="$(field VERSION)"
 serial="$(field SERIAL)"
-[ -n "$board" ] && [ -n "$version" ] && [ -n "$serial" ] || { echo "incomplete os-release" >&2; exit 1; }
+if [ -z "$board" ] || [ -z "$version" ] || [ -z "$serial" ]; then
+  echo "incomplete os-release" >&2
+  exit 1
+fi
 
 mkdir -p "$dest"
 root_name="livi-os-$board-rootfs.squashfs"
