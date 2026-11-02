@@ -175,6 +175,12 @@ for board in pi4 pi5; do
     echo "missing host XZ kernel-module indexing support: $board" >&2
     failed=1
   }
+  for symbol in BR2_PACKAGE_KMOD BR2_PACKAGE_KMOD_TOOLS BR2_PACKAGE_XZ; do
+    grep -qx "$symbol=y" "$output_base/$board/.config" || {
+      echo "missing target XZ kernel-module loading support: $board $symbol" >&2
+      failed=1
+    }
+  done
   grep -qx 'BR2_STRIP_EXCLUDE_FILES="LIVI.AppImage"' "$output_base/$board/.config" || {
     echo "factory AppImage must be excluded from ELF stripping: $board" >&2
     failed=1

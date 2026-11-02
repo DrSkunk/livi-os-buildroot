@@ -268,6 +268,21 @@ module loader must support XZ; image validation rejects an empty or incompatible
 module dependency index. VC4's SoC-audio dependency is built in so Kconfig does
 not silently downgrade the display driver to a module.
 
+Both board defconfigs enable `BR2_PACKAGE_XZ`, which enables target kmod's
+XZ support. `BR2_PACKAGE_HOST_KMOD_XZ` only affects the build host's tools.
+Without target support, compressed drivers such as HDMI's DDC I2C driver
+cannot load, leaving VC4 waiting for a dependency and the display black.
+For an existing build configured without target XZ support, rebuild kmod
+before assembling the image again (use `pi5` instead of `pi4` for Pi 5):
+
+```sh
+make pi4_defconfig
+make -C buildroot O="$PWD/output/pi4" kmod-dirclean
+make pi4
+```
+
+After flashing, `modprobe --version` must report `+XZ`.
+
 New Pi 4 builds enable the GPIO mini UART at **115200 baud, 8N1, no flow
 control** (`enable_uart=1`, `console=ttyS0,115200`). Bluetooth retains its
 PL011 UART; do not add `disable-bt` or `miniuart-bt` overlays to this setup.
