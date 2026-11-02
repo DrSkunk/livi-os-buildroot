@@ -106,8 +106,13 @@ without waiting for networking or the data partition. It rotates the framebuffer
 logo are disabled; normal boot messages stay off the HDMI screen. Serial
 diagnostics and the system journal remain available.
 
-The splash stops before LIVI starts so it cannot compete with the Rust DRM
-compositor. A brief black handoff is possible; this does not promise a
+LIVI explicitly stops the splash before starting its supervisor so it cannot
+compete with the Rust DRM compositor. The two services must not conflict:
+requesting both during boot can otherwise discard the splash start job.
+Image assembly refreshes the board's kernel command line on every build,
+including incremental builds, so stale firmware-package output cannot
+restore HDMI console text.
+A brief black handoff is possible; this does not promise a
 first-frame-seamless transition. No image can be displayed by this service
 before Linux/KMS has initialized, and panel timing must be checked on the Pi.
 The artwork is compiled into psplash and requires an OS rebuild to change.

@@ -71,7 +71,8 @@ class BootSplash(unittest.TestCase):
         app = (units / "livi.service").read_text().splitlines()
         self.assertIn("After=livi-splash.service", app)
         conflicts = [line for line in app if line.startswith("Conflicts=")]
-        self.assertTrue(any("livi-splash.service" in line for line in conflicts))
+        self.assertFalse(any("livi-splash.service" in line for line in conflicts))
+        self.assertIn("ExecStartPre=+/usr/bin/systemctl stop livi-splash.service", app)
 
     def test_panel_asset_and_boot_console_policy(self):
         board = ROOT / "board/drskunk/livi"
@@ -815,6 +816,12 @@ dbus-run-session() {
 
 class PostImage(unittest.TestCase):
     def test_builds_boot_control_and_matching_slot_cmdlines(self):
+        self.check_image("rpi5")
+
+    def test_pi4_refreshes_stale_firmware_cmdline(self):
+        self.check_image("rpi4")
+
+    def check_image(self, board):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp)
             binaries = path / "images"
@@ -849,7 +856,7 @@ class PostImage(unittest.TestCase):
             }
             script = ROOT / "board/drskunk/livi/post-image.sh"
             for _ in range(2):
-                result = subprocess.run(["bash", str(script), "rpi5"], env=env,
+                result = subprocess.run(["bash", str(script), board], env=env,
                                         capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -868,6 +875,13 @@ class PostImage(unittest.TestCase):
                           (firmware / "cmdline-root-a.txt").read_text())
             self.assertIn("root=PARTUUID=4af7b146-2c77-4808-881b-1e3ad8d15be8",
                           (firmware / "cmdline-root-b.txt").read_text())
+            expected = (ROOT / f"board/drskunk/livi/cmdline-{board}.txt").read_text()
+            self.assertEqual((firmware / "cmdline.txt").read_text(), expected)
+            self.assertEqual((firmware / "cmdline-root-a.txt").read_text(), expected)
+            self.assertEqual(
+                (firmware / "cmdline-root-b.txt").read_text(),
+                expected.replace(TrialBoot.ROOT_A, TrialBoot.ROOT_B),
+            )
             self.assertTrue((binaries / "autoboot.txt").exists())
 
 

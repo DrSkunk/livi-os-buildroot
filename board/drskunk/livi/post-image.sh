@@ -22,6 +22,7 @@ truncate -s 2G "${BINARIES_DIR}/livi-data.ext4"
   -E lazy_itable_init=0,lazy_journal_init=0 -d "$DATA_SEED" "${BINARIES_DIR}/livi-data.ext4"
 
 cp "$BOARD_DIR/config-$BOARD.txt" "${BINARIES_DIR}/rpi-firmware/config.txt"
+cp "$BOARD_DIR/cmdline-$BOARD.txt" "${BINARIES_DIR}/rpi-firmware/cmdline.txt"
 rm -f "${BINARIES_DIR}/rpi-firmware/cmdline-root-a.txt" \
   "${BINARIES_DIR}/rpi-firmware/cmdline-root-b.txt"
 FILES=()
