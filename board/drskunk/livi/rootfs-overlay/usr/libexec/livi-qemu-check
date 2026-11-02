@@ -1,0 +1,39 @@
+#!/bin/sh
+set -eu
+
+check_mount() {
+  path="$1" filesystem="$2" mode="$3"
+  [ "$(findmnt -n -o FSTYPE "$path")" = "$filesystem" ]
+  findmnt -n -o OPTIONS "$path" | tr ',' '\n' | grep -qx "$mode"
+}
+
+check_mount / squashfs ro
+check_mount /boot vfat ro
+check_mount /data ext4 rw
+[ -e /data/.livi-data ]
+[ -e /data/.expanded ]
+[ -x /data/livi/app/LIVI.AppImage ] || [ -x /opt/livi-factory/LIVI.AppImage ]
+[ -x /usr/lib/livi/livi-helperd ]
+[ -x /usr/libexec/livi-kiosk-ready ]
+[ "$(stat -c '%u:%g:%a' /usr/lib/livi/livi-helperd)" = 0:0:755 ]
+systemctl is-active --quiet livi-data-setup.service
+if [ -f /etc/ssh/authorized_keys/livi ]; then
+  ssh_ready=0
+  ssh_wait=0
+  while [ "$ssh_wait" -lt 120 ]; do
+    if systemctl is-active --quiet livi-ssh.service &&
+      [ -s /data/livi/ssh/ssh_host_ed25519_key ]; then
+      ssh_ready=1
+      break
+    fi
+    sleep 1
+    ssh_wait=$((ssh_wait + 1))
+  done
+  [ "$ssh_ready" -eq 1 ] || {
+    systemctl status livi-ssh.service --no-pager --full || true
+    echo "LIVI_QEMU_SSH_SERVICE_FAILED" >&2
+    exit 1
+  }
+  echo "LIVI_QEMU_SSH_OK"
+fi
+printf 'LIVI_QEMU_STORAGE_OK: root=squashfs-ro boot=vfat-ro data=ext4-rw\n'

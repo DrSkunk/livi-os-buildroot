@@ -1,0 +1,5 @@
+config BR2_PACKAGE_XDG_USER_DIRS
+	bool "xdg-user-dirs"
+	help
+	  Resolve standard user directories with xdg-user-dir.
+	  https://www.freedesktop.org/wiki/Software/xdg-user-dirs/

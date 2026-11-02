@@ -1,0 +1,18 @@
+From: LIVI OS maintainers <livi-os@localhost>
+Subject: [PATCH] Use a black background for the appliance boot splash
+
+Keep the framebuffer outside the supplied artwork black.
+
+Upstream-Status: Inappropriate [appliance branding]
+Signed-off-by: LIVI OS maintainers <livi-os@localhost>
+---
+ psplash-colors.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/psplash-colors.h b/psplash-colors.h
+--- a/psplash-colors.h
++++ b/psplash-colors.h
+@@ -15,2 +15,2 @@
+ /* This is the overall background color */
+-#define PSPLASH_BACKGROUND_COLOR 0xec,0xec,0xe1
++#define PSPLASH_BACKGROUND_COLOR 0x00,0x00,0x00

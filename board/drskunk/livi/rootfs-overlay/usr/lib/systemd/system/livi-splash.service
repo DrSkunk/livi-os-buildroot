@@ -1,0 +1,17 @@
+[Unit]
+Description=Early branded framebuffer boot splash
+DefaultDependencies=no
+RequiresMountsFor=/run
+Before=sysinit.target livi.service shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/livi-splash-start
+ExecStop=/usr/libexec/livi-splash-stop
+TimeoutStopSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=sysinit.target

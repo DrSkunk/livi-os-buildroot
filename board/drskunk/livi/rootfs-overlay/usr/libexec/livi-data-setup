@@ -6,7 +6,21 @@ mkdir -p /data/livi/app /data/livi/config /data/livi/cache /data/livi/state /dat
   /data/os-update /data/games/roms /data/games/saves /data/games/states \
   /data/games/retroarch/cores /data/games/retroarch/playlists /data/games/retroarch/thumbnails \
   /data/bluetooth /data/timesync /data/network/system-connections /data/etc/systemd/system \
+  /data/lockdown /data/etc/NetworkManager/conf.d \
   /data/etc/bluetooth /data/etc/minidsp /data/etc/udev/rules.d /run/user/1000
+
+mkdir -p /data/livi/config/LIVI
+if [ ! -e /data/livi/config/LIVI/config.json ] && [ ! -e /data/livi/config/config.json.last-good ]; then
+  password="$(openssl rand -hex 16)"
+  seed="$(mktemp /data/livi/config/LIVI/.config.XXXXXX)"
+  trap 'rm -f "$seed"' EXIT
+  jq -n --arg password "$password" \
+    '{wifiPassword: $password, country: "CA", mainScreenWidth: 1280, mainScreenHeight: 400, kiosk: {main: true, dash: false, aux: false}}' > "$seed"
+  sync
+  mv "$seed" /data/livi/config/LIVI/config.json
+  sync
+  trap - EXIT
+fi
 
 merge_dir() {
   source="$1" destination="$2" name="$3"
@@ -19,21 +33,26 @@ merge_dir /etc/bluetooth /data/etc/bluetooth bluetooth
 merge_dir /etc/minidsp /data/etc/minidsp minidsp
 merge_dir /etc/udev/rules.d /data/etc/udev/rules.d udev
 merge_dir /etc/systemd/system /data/etc/systemd/system systemd
+merge_dir /etc/NetworkManager/conf.d /data/etc/NetworkManager/conf.d NetworkManager
 
 mountpoint -q /var/lib/bluetooth || mount --bind /data/bluetooth /var/lib/bluetooth
 # systemd-timesyncd keeps its last-synced clock here; persisted so an offline
 # boot without RTC starts from the last known time instead of the build date.
 mountpoint -q /var/lib/systemd/timesync || mount --bind /data/timesync /var/lib/systemd/timesync
+mountpoint -q /var/lib/lockdown || mount --bind /data/lockdown /var/lib/lockdown
 mountpoint -q /etc/bluetooth || mount --bind /data/etc/bluetooth /etc/bluetooth
 mountpoint -q /etc/minidsp || mount --bind /data/etc/minidsp /etc/minidsp
 mountpoint -q /etc/udev/rules.d || mount --bind /data/etc/udev/rules.d /etc/udev/rules.d
 mountpoint -q /etc/systemd/system || mount --bind /data/etc/systemd/system /etc/systemd/system
 mountpoint -q /etc/NetworkManager/system-connections || \
   mount --bind /data/network/system-connections /etc/NetworkManager/system-connections
+mountpoint -q /etc/NetworkManager/conf.d || \
+  mount --bind /data/etc/NetworkManager/conf.d /etc/NetworkManager/conf.d
 
 ln -snf /data/games/retroarch /data/livi/config/retroarch
 chown -R livi:livi /data/livi /data/games /run/user/1000
 chmod 0700 /run/user/1000 /data/network/system-connections
+chmod 0700 /data/lockdown
 chmod 0750 /data/livi/app /data/livi/config /data/livi/update
 
 # Re-read migrated units/rules after mounting their persistent directories.

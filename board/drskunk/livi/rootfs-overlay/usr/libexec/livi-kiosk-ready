@@ -1,11 +1,66 @@
-#!/bin/sh
-set -eu
-export XDG_RUNTIME_DIR=/run/user/1000
-export WAYLAND_DISPLAY=wayland-0
-[ -S "$XDG_RUNTIME_DIR/pipewire-0" ]
-[ -S "$XDG_RUNTIME_DIR/pulse/native" ]
-# Check the actual compositor mode, not just modes advertised in EDID.
-timeout 3 wlr-randr --json | jq -e '
-  [.[] | select(.name == "HDMI-A-1" and .enabled == true and .transform == "90" and .scale == 1)
-   | .modes[] | select(.current == true and .width == 400 and .height == 1280)]
-  | length == 1' >/dev/null
+#!/usr/bin/python3
+"""Check the Rust application's API-2 heartbeat without taking its control socket."""
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+import time
+
+
+RUNTIME = Path("/run/user/1000")
+
+
+def validate(report, session, now):
+    if (not isinstance(report, dict) or type(report.get("api")) is not int
+            or report["api"] != 2 or report.get("session") != session):
+        raise ValueError("missing or incompatible LIVI OS API-2 heartbeat")
+    updated = report.get("monotonic")
+    if type(updated) not in (int, float) or not now - 5 <= updated <= now:
+        raise ValueError("LIVI readiness heartbeat is stale or invalid")
+    for field in ("core", "ui", "compositor"):
+        pid = report.get(field)
+        if type(pid) is not int or pid <= 1:
+            raise ValueError(f"invalid {field} PID")
+        status = Path(f"/proc/{pid}/stat").read_text()
+        fields = status.rsplit(")", 1)
+        if len(fields) != 2 or not fields[1].split():
+            raise ValueError(f"invalid {field} process status")
+        if fields[1].split()[0] in ("Z", "X", "x"):
+            raise ValueError(f"{field} process has exited")
+        os.kill(pid, 0)
+    if report.get("framePresented") is not True:
+        raise ValueError("LIVI UI has not presented a frame")
+    expected = {"connector": "HDMI-A-1", "width": 400, "height": 1280,
+                "transform": "90", "scale": 1}
+    output = report.get("output")
+    if (output != expected or any(type(output[key]) is not type(value)
+                                  for key, value in expected.items())):
+        raise ValueError("LIVI display mode, rotation or scale is incorrect")
+
+
+def main():
+    try:
+        for path in (RUNTIME / "pipewire-0", RUNTIME / "pulse/native"):
+            if not stat.S_ISSOCK(path.stat().st_mode):
+                raise ValueError(f"audio socket missing: {path}")
+        session = (RUNTIME / "livi-os-session").read_text().strip()
+        if not session:
+            raise ValueError("LIVI OS session is empty")
+        descriptor = os.open(RUNTIME / "livi-os-ready.json",
+                             os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, "rb") as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                raise ValueError("LIVI readiness report must be a regular file")
+            raw = stream.read(16385)
+        if len(raw) > 16384:
+            raise ValueError("LIVI readiness report is too large")
+        validate(json.loads(raw), session, time.monotonic())
+    except (OSError, ValueError, KeyError) as error:
+        print(f"livi-kiosk-ready: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -34,7 +34,7 @@ def capture(stream, path, fatal_path, limit=LIMIT):
             while chunk:
                 if size >= limit:
                     # The writer owns the descriptor, so rotation never leaves
-                    # Cage writing to an unlinked file or needs copytruncate.
+                    # LIVI writing to an unlinked file or needs copytruncate.
                     output.close()
                     os.replace(path, previous)
                     output = path.open("ab", buffering=0)

@@ -1,0 +1,14 @@
+[Unit]
+Description=Configure TJD CarPiHAT CAN interface in listen-only mode
+After=systemd-modules-load.service systemd-udev-trigger.service
+ConditionPathExists=/sys/class/net/can0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/ip link set dev can0 down
+ExecStart=/usr/sbin/ip link set dev can0 type can bitrate 1000000 listen-only on
+ExecStart=/usr/sbin/ip link set dev can0 up
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

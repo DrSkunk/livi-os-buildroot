@@ -1,10 +1,15 @@
 #!/bin/sh
 set -eu
 
-root="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
+root="$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)"
+buildroot_dir="${BUILDROOT_DIR:-$root/buildroot}"
+output_base="${OUTPUT_BASE:-$root/output}"
 failed=0
 
-for script in $(find "$root/board" "$root/support" -type f \( -name '*.sh' -o -path '*/init.d/*' -o -path '*/usr/bin/livi-*' -o -path '*/usr/libexec/livi-*' -o -name 'fetch-livi' -o -name 'check-project' -o -name 'make-os-update' \)); do
+scripts="$(mktemp)"
+trap 'rm -f "$scripts"' EXIT
+find "$root/board" "$root/support" -type f \( -name '*.sh' -o -name '*.py' -o -path '*/init.d/*' -o -path '*/usr/bin/livi-*' -o -path '*/usr/libexec/livi-*' -o -name 'fetch-livi' -o -name 'check-project' -o -name 'make-os-update' -o -name 'check-rust-payload' -o -name 'qemu-pi4' \) > "$scripts"
+while IFS= read -r script; do
   if head -n1 "$script" | grep -q python3; then
     python3 -c 'import ast, pathlib, sys; ast.parse(pathlib.Path(sys.argv[1]).read_text())' "$script" || failed=1
     continue
@@ -16,13 +21,24 @@ for script in $(find "$root/board" "$root/support" -type f \( -name '*.sh' -o -p
       failed=1
     fi
   fi
-done
+  if command -v shellcheck >/dev/null 2>&1; then
+    shellcheck --severity=warning -x "$script" || failed=1
+  fi
+done < "$scripts"
 
 for required in \
   board/drskunk/livi/rootfs-overlay/usr/bin/livi-os-slot \
   board/drskunk/livi/rootfs-overlay/usr/bin/livi-os-update \
   board/drskunk/livi/rootfs-overlay/usr/bin/livi-data-grow \
-  support/make-os-update; do
+  support/make-os-update \
+  board/drskunk/livi/rootfs-overlay/usr/libexec/livi-projection-helper \
+  board/drskunk/livi/rootfs-overlay/usr/libexec/livi-kiosk-ready \
+  board/drskunk/livi/rootfs-overlay/usr/libexec/livi-splash-start \
+  board/drskunk/livi/rootfs-overlay/usr/libexec/livi-splash-stop \
+  board/drskunk/livi/rootfs-overlay/usr/libexec/livi-qemu-check \
+  board/drskunk/livi/post-fakeroot.sh \
+  support/qemu-pi4 \
+  support/check-rust-payload; do
   test -x "$root/$required" || { echo "not executable: $required" >&2; failed=1; }
   # CI checks out the mode recorded in git, not the local file mode.
   mode="$(git -C "$root" ls-files -s -- "$required" 2>/dev/null | cut -d' ' -f1)"
@@ -43,7 +59,26 @@ grep -q '^boot_partition=3$' "$root/board/drskunk/livi/autoboot.txt" || failed=1
 grep -q 'livi.grow_data=1' "$root/board/drskunk/livi/cmdline-rpi4.txt" || failed=1
 grep -q 'livi.grow_data=1' "$root/board/drskunk/livi/cmdline-rpi5.txt" || failed=1
 
+grep -qx 'enable_uart=1' "$root/board/drskunk/livi/config-rpi4.txt" || {
+  echo "missing Pi 4 GPIO UART enablement" >&2
+  failed=1
+}
+grep -q 'console=ttyS0,115200' "$root/board/drskunk/livi/cmdline-rpi4.txt" || {
+  echo "missing Pi 4 GPIO serial console" >&2
+  failed=1
+}
+for symbol in CONFIG_SERIAL_8250 CONFIG_SERIAL_8250_CONSOLE CONFIG_SERIAL_8250_BCM2835AUX; do
+  grep -qx "$symbol=y" "$root/board/drskunk/livi/linux.fragment" || {
+    echo "missing built-in GPIO UART kernel option: $symbol" >&2
+    failed=1
+  }
+done
+
 for config in config-rpi4.txt config-rpi5.txt; do
+  grep -qx 'disable_splash=1' "$root/board/drskunk/livi/$config" || {
+    echo "firmware rainbow must be disabled: $config" >&2
+    failed=1
+  }
   grep -qx 'display_auto_detect=0' "$root/board/drskunk/livi/$config" || {
     echo "unexpected DSI display auto-detection: $config" >&2
     failed=1
@@ -57,9 +92,22 @@ for board in rpi4 rpi5; do
   }
 done
 
-for symbol in CONFIG_DRM_VC4 CONFIG_INPUT_EVDEV CONFIG_HID CONFIG_HID_GENERIC CONFIG_USB_HID CONFIG_HID_MULTITOUCH; do
+for symbol in CONFIG_DRM_VC4 CONFIG_SND_SOC CONFIG_INPUT_EVDEV CONFIG_HID CONFIG_HID_GENERIC CONFIG_USB_HID CONFIG_HID_MULTITOUCH CONFIG_USER_NS CONFIG_SPI CONFIG_SPI_BCM2835 CONFIG_CAN CONFIG_CAN_RAW CONFIG_CAN_DEV; do
   grep -qx "$symbol=y" "$root/board/drskunk/livi/linux.fragment" || {
     echo "missing HDMI/USB touch kernel option: $symbol" >&2
+    failed=1
+  }
+done
+grep -qx 'CONFIG_CAN_MCP251X=m' "$root/board/drskunk/livi/linux.fragment" || {
+  echo "missing CarPiHAT MCP2515 kernel module" >&2
+  failed=1
+}
+for overlay_line in \
+  'dtparam=spi=on' \
+  'dtoverlay=mcp2515-can0,oscillator=8000000,interrupt=23' \
+  'dtoverlay=spi-bcm2835-overlay'; do
+  grep -qx "$overlay_line" "$root/board/drskunk/livi/config-rpi4.txt" || {
+    echo "missing CarPiHAT device-tree setting: $overlay_line" >&2
     failed=1
   }
 done
@@ -80,23 +128,69 @@ grep -q '^livi 1000 livi 1000 ' "$root/board/drskunk/livi/users.txt" || {
   echo "LIVI UID/GID must match /run/user/1000" >&2
   failed=1
 }
+grep -q '^livi 1000 livi 1000 \* ' "$root/board/drskunk/livi/users.txt" || {
+  echo "LIVI password login must be disabled" >&2
+  failed=1
+}
+grep -qx 'BR2_PACKAGE_OPENSSH=y' "$root/configs/livi_rpi4_defconfig" || {
+  echo "Pi 4 key-only diagnostics require OpenSSH" >&2
+  failed=1
+}
+for setting in \
+  'AuthenticationMethods publickey' \
+  'PasswordAuthentication no' \
+  'PermitRootLogin no' \
+  'AllowTcpForwarding no'; do
+  grep -qx "$setting" "$root/board/drskunk/livi/rootfs-overlay/etc/ssh/sshd_config" || {
+    echo "unsafe or missing SSH setting: $setting" >&2
+    failed=1
+  }
+done
 
 for board in pi4 pi5; do
   echo "Validating $board defconfig"
-  make -s -C "$root" "${board}_defconfig" HOSTARCH=x86_64
+  make -s -C "$root" "${board}_defconfig" HOSTARCH=x86_64 \
+    BUILDROOT_DIR="$buildroot_dir" OUTPUT_BASE="$output_base"
   # Validate the CI host configuration even when this check runs on ARM/macOS.
   # Kconfig otherwise silently drops Bootlin, glibc, systemd and LIVI.
-  for symbol in BR2_TOOLCHAIN_EXTERNAL_BOOTLIN BR2_TOOLCHAIN_USES_GLIBC BR2_INIT_SYSTEMD BR2_PACKAGE_LIVI BR2_PACKAGE_BASH BR2_PACKAGE_COREUTILS BR2_PACKAGE_SQUASHFS BR2_PACKAGE_SQUASHFS_XZ BR2_PACKAGE_CAGE BR2_PACKAGE_WIREPLUMBER; do
-    grep -qx "$symbol=y" "$root/output/$board/.config" || {
+  for symbol in BR2_TOOLCHAIN_EXTERNAL_BOOTLIN BR2_TOOLCHAIN_USES_GLIBC BR2_INIT_SYSTEMD BR2_PACKAGE_LIVI BR2_PACKAGE_PSPLASH BR2_PACKAGE_PSPLASH_FULL_SCREEN BR2_PACKAGE_BASH BR2_PACKAGE_COREUTILS BR2_PACKAGE_SQUASHFS BR2_PACKAGE_SQUASHFS_XZ BR2_PACKAGE_WIREPLUMBER BR2_PACKAGE_WAYLAND BR2_PACKAGE_LIBXKBCOMMON BR2_PACKAGE_LIBGUDEV BR2_PACKAGE_LIBVA BR2_PACKAGE_SEATD BR2_PACKAGE_IPROUTE2 BR2_PACKAGE_PULSEAUDIO BR2_PACKAGE_SBC BR2_PACKAGE_XDG_USER_DIRS; do
+    grep -qx "$symbol=y" "$output_base/$board/.config" || {
       echo "missing resolved runtime dependency: $board $symbol" >&2
       failed=1
     }
   done
+  for symbol in BR2_PACKAGE_CAGE BR2_PACKAGE_LIBGTK3 BR2_PACKAGE_LIBNSS BR2_PACKAGE_CUPS; do
+    if grep -qx "$symbol=y" "$output_base/$board/.config"; then
+      echo "unexpected legacy Electron/Cage dependency: $board $symbol" >&2
+      failed=1
+    fi
+  done
+  if [ "$board" = pi4 ]; then
+    grep -qx 'BR2_PACKAGE_OPENSSH=y' "$output_base/$board/.config" || {
+      echo "missing resolved OpenSSH runtime dependency: $board" >&2
+      failed=1
+    }
+  fi
+  grep -qx 'BR2_PACKAGE_HOST_KMOD_XZ=y' "$output_base/$board/.config" || {
+    echo "missing host XZ kernel-module indexing support: $board" >&2
+    failed=1
+  }
+  grep -qx 'BR2_STRIP_EXCLUDE_FILES="LIVI.AppImage"' "$output_base/$board/.config" || {
+    echo "factory AppImage must be excluded from ELF stripping: $board" >&2
+    failed=1
+  }
+  grep -qx 'BR2_PACKAGE_XKEYBOARD_CONFIG=y' "$output_base/$board/.config" || {
+    echo "missing runtime keyboard layout data: $board" >&2
+    failed=1
+  }
+  if grep -qx 'BR2_TARGET_ENABLE_ROOT_LOGIN=y' "$output_base/$board/.config"; then
+    echo "Password login for root must be disabled: $board" >&2
+    failed=1
+  fi
 done
 
-if command -v shellcheck >/dev/null 2>&1; then
-  find "$root/board" "$root/support" -type f \( -name '*.sh' -o -path '*/init.d/*' -o -path '*/usr/bin/livi-*' \) \
-    -exec shellcheck -x {} + || failed=1
+if command -v visudo >/dev/null 2>&1; then
+  visudo -c -f "$root/board/drskunk/livi/rootfs-overlay/etc/sudoers.d/99-livi" || failed=1
 fi
 
 exit "$failed"

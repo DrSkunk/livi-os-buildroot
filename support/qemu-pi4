@@ -1,0 +1,82 @@
+#!/bin/bash
+set -euo pipefail
+
+preview=0
+if [ "${1:-}" = --preview ]; then
+  preview=1
+  shift
+fi
+images="${1:?usage: support/qemu-pi4 [--preview] IMAGES_DIRECTORY [SERIAL_LOG]}"
+images="$(cd "$images" && pwd)"
+log="${2:-$images/qemu-pi4.log}"
+for tool in qemu-system-aarch64 qemu-img; do
+  command -v "$tool" >/dev/null || { echo "Missing $tool" >&2; exit 1; }
+done
+qemu-system-aarch64 -machine help | grep -q '^raspi4b ' || {
+  echo "This QEMU does not support raspi4b" >&2; exit 1;
+}
+for file in livi-os-rpi4.img Image bcm2711-rpi-4-b.dtb rpi-firmware/cmdline.txt; do
+  [ -s "$images/$file" ] || { echo "Missing $images/$file" >&2; exit 1; }
+done
+tmp="$(mktemp -d)"
+cleanup() {
+  if [ -n "${pid:-}" ]; then
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  fi
+  rm -f "$tmp/sd.qcow2"
+  rmdir "$tmp"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+# QEMU's SD card size must be a power of two. The backing image stays untouched.
+qemu-img create -f qcow2 -F raw -b "$images/livi-os-rpi4.img" "$tmp/sd.qcow2" 8G
+cmdline="$(cat "$images/rpi-firmware/cmdline.txt")"
+# Direct DTB loading leaves the PL011 at ttyAMA1, unlike firmware boot.
+cmdline="${cmdline//console=ttyAMA0,115200/console=ttyAMA1,115200}"
+cmdline="${cmdline//console=ttyS0,115200/console=ttyAMA1,115200}"
+display=(-display none)
+if [ "$preview" -eq 1 ]; then
+  if qemu-system-aarch64 -display help | grep -qx cocoa; then
+    display=(-display cocoa)
+  elif qemu-system-aarch64 -display help | grep -qx gtk; then
+    display=(-display gtk)
+  elif qemu-system-aarch64 -display help | grep -qx sdl; then
+    display=(-display sdl)
+  else
+    echo "No supported windowed QEMU display backend (cocoa, gtk or sdl)" >&2
+    exit 1
+  fi
+  display+=(-device usb-kbd -device usb-tablet)
+  cmdline="$cmdline console=tty0"
+  echo "Opening a 1280x400 Pi framebuffer with generic USB keyboard/tablet input."
+  echo "This is not VC4/V3D acceleration or a Waveshare touchscreen emulation."
+fi
+qemu-system-aarch64 -machine raspi4b -m 2G -smp 4 \
+  -global bcm2835-fb.xres=1280 -global bcm2835-fb.yres=400 \
+  -kernel "$images/Image" -dtb "$images/bcm2711-rpi-4-b.dtb" \
+  -drive "file=$tmp/sd.qcow2,if=sd,format=qcow2" \
+  -append "$cmdline earlycon=pl011,mmio32,0xfe201000 livi.qemu_test=1 systemd.watchdog_sec=0 systemd.show_status=1 systemd.log_level=info loglevel=6" \
+  "${display[@]}" -name "LIVI Pi 4 - 1280x400 framebuffer" \
+  -monitor none -serial stdio -no-reboot > "$log" 2>&1 &
+pid=$!
+for ((second=0; second<300; second++)); do
+  if grep -q 'LIVI_QEMU_STORAGE_OK: root=squashfs-ro boot=vfat-ro data=ext4-rw' "$log"; then
+    echo "PASS: Pi 4 kernel, systemd, immutable root, boot/data mounts and data growth"
+    echo "NOT TESTED: Pi firmware/tryboot, VC4/V3D, panel/touch, audio, radios or phone projection"
+    if [ "$preview" -eq 1 ]; then
+      echo "Preview remains open; close the QEMU window or press Ctrl-C to stop."
+      wait "$pid"
+      pid=
+    fi
+    exit 0
+  fi
+  if ! kill -0 "$pid" 2>/dev/null; then
+    echo "QEMU exited before the storage smoke test passed; inspect $log" >&2
+    exit 1
+  fi
+  sleep 1
+done
+echo "Timed out waiting for the storage smoke test; inspect $log" >&2
+exit 1

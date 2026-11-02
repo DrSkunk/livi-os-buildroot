@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+
+fail() { echo "livi-can-capture: $*" >&2; exit 2; }
+[ "$(/usr/bin/id -u)" = 0 ] || fail "must run as root"
+[ "$#" = 0 ] || fail "does not accept arguments"
+[ -e /sys/class/net/can0 ] || fail "CAN interface can0 is unavailable"
+
+exec /usr/bin/python3 -I -B -u /usr/libexec/livi-can-capture.py

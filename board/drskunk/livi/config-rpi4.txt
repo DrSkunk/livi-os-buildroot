@@ -2,7 +2,10 @@ start_file=start4.elf
 fixup_file=fixup4.dat
 kernel=Image
 arm_64bit=1
+# GPIO14/15 use the mini UART; leave the PL011 assigned to Bluetooth.
+enable_uart=1
 disable_overscan=1
+disable_splash=1
 dtoverlay=vc4-kms-v3d,cma-512
 max_framebuffers=3
 disable_fw_kms_setup=1
@@ -14,5 +17,9 @@ dtparam=i2c_arm=on
 dtoverlay=i2c-gpio,bus=2,i2c_gpio_sda=19,i2c_gpio_scl=26,i2c_gpio_delay_us=5
 # Pi 4 has no RTC. For an optional DS3231 module on I2C1 (GPIO2/3), uncomment:
 #dtoverlay=i2c-rtc,ds3231
+# TJD CarPiHAT MCP2515 CAN controller (8 MHz crystal, BCM23 interrupt).
+dtparam=spi=on
+dtoverlay=mcp2515-can0,oscillator=8000000,interrupt=23
+dtoverlay=spi-bcm2835-overlay
 # Keep the watchdog active until systemd takes over.
 kernel_watchdog_timeout=120
