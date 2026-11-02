@@ -1,62 +1,319 @@
 #!/bin/sh
+# Signed A/B OS updates from GitHub releases or a USB stick.
+# An update is a signed manifest naming the boot and SquashFS images by size
+# and SHA-256. Both inactive slots are written and verified before tryboot.
 set -eu
 
 ROOT_A=8d9f2f13-5a82-4fd8-93e7-88e7ea6118d2
 ROOT_B=4af7b146-2c77-4808-881b-1e3ad8d15be8
+BOOT_A=cbd67f9c-d8df-4ac4-a7bd-4da6f7a60316
+BOOT_B=62194703-ff6d-4c28-9182-6ecdc15203bf
 STATE=/data/os-update
-image="${1:?usage: livi-os-update ROOTFS.squashfs SIGNATURE}"
-signature="${2:?usage: livi-os-update ROOTFS.squashfs SIGNATURE}"
-key="$STATE/trusted.pem"
-mkdir -p "$STATE"
-exec 9>/run/livi-os-update.lock
-flock -n 9 || { echo "Another OS update is running" >&2; exit 1; }
-[ ! -f "$STATE/pending" ] || { echo "Confirm or cancel the pending update first" >&2; exit 1; }
+LIB=/usr/lib/livi
+BY_PARTUUID=/dev/disk/by-partuuid
+USB_MOUNTS=/run/livi-os-usb
+LOCK=/run/livi-os-update.lock
+DEFAULT_REPO=DrSkunk/livi-os-buildroot
 
-if [ ! -f "$image" ] || [ ! -f "$signature" ]; then
-  echo "Image or signature missing" >&2
-  exit 1
-fi
-# Verify and write a private snapshot, so the caller cannot change the file
-# between signature verification and the block-device write.
-work="$(mktemp -d "$STATE/install.XXXXXX")"
-trap 'rm -rf "$work"' EXIT
+usage() {
+  cat >&2 <<'USAGE'
+usage: livi-os-update status
+       livi-os-update check    [--channel stable|nightly]
+       livi-os-update download [--channel stable|nightly] [--allow-downgrade] [--retry-failed]
+       livi-os-update update   [--channel stable|nightly] [--allow-downgrade] [--retry-failed]
+       livi-os-update install MANIFEST.json [--allow-downgrade] [--retry-failed]
+       livi-os-update usb DEVICE
+       livi-os-update apply
+USAGE
+  exit 2
+}
+die() { echo "livi-os-update: $*" >&2; exit 1; }
+say() { echo "livi-os-update: $*" >&2; }
+osrel() { sed -n "s/^$1=//p" "$LIB/os-release"; }
+size_of() { wc -c < "$1" | tr -d ' '; }
+
+cmd="${1:-}"
+[ $# -eq 0 ] || shift
+allow_downgrade=0 retry_failed=0 channel="" arg=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --allow-downgrade) allow_downgrade=1;;
+    --retry-failed) retry_failed=1;;
+    --channel) [ $# -ge 2 ] || usage; channel="$2"; shift;;
+    --channel=*) channel="${1#--channel=}";;
+    -*) usage;;
+    *) [ -z "$arg" ] || usage; arg="$1";;
+  esac
+  shift
+done
+
+work="" usb_mount=""
+cleanup() {
+  [ -z "$usb_mount" ] || umount "$usb_mount" 2>/dev/null || true
+  [ -z "$work" ] || rm -rf "$work"
+}
+trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-cp --reflink=auto "$image" "$work/rootfs.squashfs"
-cp "$signature" "$work/rootfs.sig"
-image="$work/rootfs.squashfs"
-signature="$work/rootfs.sig"
-[ -f "$key" ] || { echo "Provision $key before OS updates" >&2; exit 1; }
-[ "$(od -An -tx1 -N4 "$image" | tr -d ' \n')" = 68737173 ] || { echo "Not a SquashFS image" >&2; exit 1; }
-openssl dgst -sha256 -verify "$key" -signature "$signature" "$image"
-# The boot partition is shared. Reject roots built for another kernel/board.
-installed_boot="$(cat /usr/lib/livi/boot-id)"
-candidate_boot="$(unsquashfs -cat "$image" usr/lib/livi/boot-id)"
-if [ -z "$installed_boot" ] || [ "$candidate_boot" != "$installed_boot" ]; then
-  echo "Boot artifacts differ; this update requires a full-image installation" >&2
-  exit 1
-fi
 
-current="$(livi-os-slot current)"
-[ "$(livi-os-slot default)" = "$current" ] || {
-  echo "Confirm the running trial before installing another OS update" >&2; exit 1;
+board="$(osrel BOARD)"
+installed_version="$(osrel VERSION)"
+installed_serial="$(osrel SERIAL)"
+[ -n "$board" ] && [ -n "$installed_serial" ] || die "$LIB/os-release is incomplete"
+
+start() {
+  mkdir -p "$STATE"
+  exec 9>"$LOCK"
+  flock "$@" 9 || die "another OS update is running"
+  work="$(mktemp -d "$STATE/work.XXXXXX")"
 }
-case "$current" in
-  "$ROOT_A") target="$ROOT_B";;
-  "$ROOT_B") target="$ROOT_A";;
-  *) echo "Unknown current root slot: $current" >&2; exit 1;;
+
+require_idle() {
+  [ ! -f "$STATE/pending" ] || die "an update is already staged; run 'livi-os-update apply' or 'livi-os-slot cancel'"
+  [ "$(livi-os-slot default)" = "$(livi-os-slot current)" ] || die "the running OS trial is not confirmed yet"
+}
+
+# Copies a manifest and signature into the private work directory, verifies
+# them, and loads the m_* fields. Only the private copies are used afterwards.
+load_manifest() {
+  key="$LIB/os-update.pem"
+  [ -f "$key" ] || die "this OS image has no update key; install a full image"
+  [ -f "$1" ] && [ -f "$2" ] || die "update manifest or signature missing"
+  [ "$(size_of "$1")" -le 65536 ] && [ "$(size_of "$2")" -le 4096 ] || die "update manifest too large"
+  cp "$1" "$work/manifest.json"
+  cp "$2" "$work/manifest.sig"
+  openssl dgst -sha256 -verify "$key" -signature "$work/manifest.sig" "$work/manifest.json" >/dev/null 2>&1 ||
+    die "update manifest signature is not valid"
+  jq -er 'if .format == 2 then .board, .version, (.serial|tostring),
+            .rootfs.file, (.rootfs.size|tostring), .rootfs.sha256,
+            .bootfs.file, (.bootfs.size|tostring), .bootfs.sha256
+          else error("unsupported manifest format") end' "$work/manifest.json" > "$work/fields" ||
+    die "update manifest is malformed"
+  { read -r m_board; read -r m_version; read -r m_serial
+    read -r m_file; read -r m_size; read -r m_sha
+    read -r m_boot_file; read -r m_boot_size; read -r m_boot_sha; } < "$work/fields"
+  case "$m_version" in ''|*[!A-Za-z0-9._+-]*) die "invalid manifest version";; esac
+  case "$m_serial$m_size$m_boot_size" in *[!0-9]*) die "invalid manifest number";; esac
+  case "$m_file" in ''|.*|*[!A-Za-z0-9._-]*) die "invalid manifest file name";; esac
+  case "$m_boot_file" in ''|.*|*[!A-Za-z0-9._-]*) die "invalid boot image file name";; esac
+  [ "$m_file" != "$m_boot_file" ] || die "root and boot image names must differ"
+  for hash in "$m_sha" "$m_boot_sha"; do
+    case "$hash" in ''|*[!0-9a-f]*) die "invalid manifest hash";; esac
+    [ "${#hash}" -eq 64 ] || die "invalid manifest hash"
+  done
+  [ "$m_size" -gt 0 ] && [ "$m_boot_size" -gt 0 ] || die "invalid manifest size"
+}
+
+# Sets m_state to "current" when the manifest is the installed OS, or "new";
+# refuses anything that cannot or should not be installed.
+assess() {
+  m_state=current
+  [ "$m_board" = "$board" ] || die "update is for $m_board, this device is $board"
+  if [ "$m_serial" -eq "$installed_serial" ] && [ "$m_version" = "$installed_version" ]; then
+    return
+  fi
+  [ "$m_serial" -ge "$installed_serial" ] || [ "$allow_downgrade" = 1 ] ||
+    die "refusing downgrade from $installed_version to $m_version (use --allow-downgrade)"
+  for failed in "$STATE"/failed-*; do
+    [ -f "$failed" ] && [ "$(sed -n 4p "$failed")" = "$m_sha" ] || continue
+    [ "$retry_failed" = 1 ] || die "$m_version already failed its trial boot (use --retry-failed)"
+  done
+  m_state=new
+}
+
+# Writes the verified images to the inactive boot and root slots. Readback
+# hashes are authoritative, so sources may live on removable or user media.
+write_image() {
+  src="$1" device="$2" size="$3" sha="$4" label="$5"
+  [ -f "$src" ] || die "$label image missing"
+  [ "$(size_of "$src")" = "$size" ] || die "$label image size does not match the manifest"
+  [ "$size" -le "$(blockdev --getsize64 "$device")" ] || die "$label image exceeds its slot"
+  dd if="$src" of="$device" bs=4M conv=fsync 2>/dev/null || die "writing the inactive $label slot failed"
+  blockdev --flushbufs "$device"
+  actual="$(head -c "$size" "$device" | sha256sum | awk '{print $1}')"
+  [ "$actual" = "$sha" ] || die "inactive $label slot readback does not match the signed hash"
+}
+install_rootfs() {
+  root_src="$1"
+  boot_src="$2"
+  [ -f "$root_src" ] || die "root image $m_file missing"
+  [ "$(od -An -tx1 -N4 "$root_src" | tr -d ' \n')" = 68737173 ] || die "root image is not SquashFS"
+  current="$(livi-os-slot current)"
+  case "$current" in
+    "$ROOT_A") target="$ROOT_B"; boot_target="$BOOT_B";;
+    "$ROOT_B") target="$ROOT_A"; boot_target="$BOOT_A";;
+    *) die "unknown current root slot: $current";;
+  esac
+  root_device="$(readlink -f "$BY_PARTUUID/$target")"
+  boot_device="$(readlink -f "$BY_PARTUUID/$boot_target")"
+  [ -b "$root_device" ] || die "inactive root device not found"
+  [ -b "$boot_device" ] || die "inactive boot device not found"
+  say "writing $m_version to inactive boot and root slots"
+  write_image "$root_src" "$root_device" "$m_size" "$m_sha" rootfs
+  write_image "$boot_src" "$boot_device" "$m_boot_size" "$m_boot_sha" bootfs
+  livi-os-slot stage "$target" "$m_sha" || die "staging the trial boot failed"
+  cp "$work/manifest.json" "$STATE/staged.json.new"
+  sync
+  mv -f "$STATE/staged.json.new" "$STATE/staged.json"
+  sync
+  say "staged $m_version; it is tried at the next power-on (or now with 'livi-os-update apply')"
+}
+
+# Leaves m_state=current (nothing to do) or installs and leaves m_state=new.
+# Never call this from a conditional: that would disable set -e inside it.
+install_manifest() {
+  load_manifest "$1" "$1.sig"
+  assess
+  if [ "$m_state" != new ]; then
+    say "$installed_version is already installed"
+    return 0
+  fi
+  install_rootfs "$(dirname "$1")/$m_file" "$(dirname "$1")/$m_boot_file"
+}
+
+resolve_channel() {
+  [ -n "$channel" ] || channel="$(cat "$STATE/channel" 2>/dev/null || echo stable)"
+  repo="${LIVI_OS_UPDATE_REPO:-$(cat "$STATE/repo" 2>/dev/null || echo "$DEFAULT_REPO")}"
+  echo "$repo" | grep -Eqx '[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+' || die "invalid repository: $repo"
+  case "$channel" in
+    stable) api="https://api.github.com/repos/$repo/releases/latest";;
+    nightly) api="https://api.github.com/repos/$repo/releases/tags/nightly";;
+    *) die "channel must be stable or nightly";;
+  esac
+}
+
+fetch() { curl -fsSL --retry 3 --connect-timeout 15 -A livi-os-update "$@"; }
+asset_url() {
+  jq -er --arg n "$1" 'first(.assets[] | select(.name == $n) | .browser_download_url)' "$work/release.json" ||
+    die "the $channel release has no $1"
+}
+download_asset() {
+  file="$1" size="$2" sha="$3" label="$4"
+  target="$dl/$file"
+  if [ -f "$target" ]; then
+    if [ "$(size_of "$target")" = "$size" ] &&
+       [ "$(sha256sum "$target" | awk '{print $1}')" = "$sha" ]; then
+      return 0
+    fi
+    rm -f "$target"
+  fi
+  part="$target.part"
+  have=0
+  [ ! -f "$part" ] || have="$(size_of "$part")"
+  if [ "$have" -gt "$size" ]; then
+    rm -f "$part"
+    have=0
+  fi
+  avail="$(df -Pk "$dl" | awk 'NR == 2 {print $4}')"
+  [ $((avail * 1024)) -gt $((size - have + 67108864)) ] || die "not enough free space on /data"
+  url="$(asset_url "$file")"
+  say "downloading $label ($size bytes)"
+  fetch -C - "$url" -o "$part" || die "$label download failed; run again to resume"
+  if [ "$(size_of "$part")" != "$size" ] || [ "$(sha256sum "$part" | awk '{print $1}')" != "$sha" ]; then
+    rm -f "$part"
+    die "downloaded $label does not match the signed manifest"
+  fi
+  mv -f "$part" "$target"
+  sync
+}
+
+# Loads the verified manifest of the newest release on the channel.
+fetch_manifest() {
+  resolve_channel
+  fetch -H 'Accept: application/vnd.github+json' "$api" -o "$work/release.json" ||
+    die "cannot read the $channel release from $repo"
+  url="$(asset_url "livi-os-$board-update.json")"
+  fetch "$url" -o "$work/remote.json" || die "manifest download failed"
+  url="$(asset_url "livi-os-$board-update.json.sig")"
+  fetch "$url" -o "$work/remote.sig" || die "signature download failed"
+  load_manifest "$work/remote.json" "$work/remote.sig"
+}
+
+# Downloads the release into $STATE/download, resuming a partial download of
+# the same manifest. Sets dl_manifest to its path, or empty when up to date.
+download() {
+  dl_manifest=""
+  fetch_manifest
+  assess
+  if [ "$m_state" != new ]; then
+    say "$installed_version is already the newest $channel release"
+    return 0
+  fi
+  dl="$STATE/download"
+  manifest="$dl/livi-os-$board-update.json"
+  if [ -f "$manifest" ] && ! cmp -s "$manifest" "$work/manifest.json"; then
+    rm -rf "$dl"
+  fi
+  mkdir -p "$dl"
+  cp "$work/manifest.json" "$manifest"
+  cp "$work/manifest.sig" "$manifest.sig"
+  download_asset "$m_file" "$m_size" "$m_sha" rootfs
+  download_asset "$m_boot_file" "$m_boot_size" "$m_boot_sha" bootfs
+  dl_manifest="$manifest"
+}
+
+usb() {
+  name="${arg##*/}"
+  case "$name" in ''|*[!A-Za-z0-9]*) die "invalid block device: $arg";; esac
+  mkdir -p "$USB_MOUNTS/$name"
+  mount -t vfat,exfat,ext4 -o ro,nosuid,nodev,noexec "/dev/$name" "$USB_MOUNTS/$name" ||
+    { rmdir "$USB_MOUNTS/$name" 2>/dev/null || true; say "cannot mount /dev/$name"; return 0; }
+  usb_mount="$USB_MOUNTS/$name"
+  manifest="$usb_mount/livi-update/livi-os-$board-update.json"
+  [ -f "$manifest" ] || { say "no livi-update/livi-os-$board-update.json on /dev/$name"; return 0; }
+  require_idle
+  install_manifest "$manifest"
+  [ "$m_state" = new ] || return 0
+  umount "$usb_mount"
+  usb_mount=""
+  rmdir "$USB_MOUNTS/$name" 2>/dev/null || true
+  # A signed USB update starts its trial immediately after staging.
+  exec livi-os-slot reboot
+}
+
+status() {
+  pending=false staged=null
+  if [ -f "$STATE/pending" ]; then
+    pending=true
+    staged="$(jq -c '{version, serial}' "$STATE/staged.json" 2>/dev/null || echo null)"
+  fi
+  jq -n --arg board "$board" --arg version "$installed_version" --argjson serial "$installed_serial" \
+    --arg slot "$(livi-os-slot current)" --arg default "$(livi-os-slot default)" \
+    --argjson pending "$pending" --argjson staged "$staged" \
+    --argjson key "$([ -f "$LIB/os-update.pem" ] && echo true || echo false)" \
+    '{board: $board, version: $version, serial: $serial, slot: $slot,
+      trial: ($slot != $default), pending: $pending, staged: $staged, update_key: $key}'
+}
+
+case "$cmd" in
+  status) [ -z "$arg" ] || usage; status;;
+  check)
+    [ -z "$arg" ] || usage
+    start -n
+    fetch_manifest
+    assess
+    jq -n --arg channel "$channel" --arg installed "$installed_version" --arg available "$m_version" \
+      --argjson update "$([ "$m_state" = new ] && echo true || echo false)" \
+      '{channel: $channel, installed: $installed, available: $available, update: $update}'
+    ;;
+  download)
+    [ -z "$arg" ] || usage
+    start -n
+    require_idle
+    download
+    [ -z "$dl_manifest" ] || echo "$dl_manifest"
+    ;;
+  update)
+    [ -z "$arg" ] || usage
+    start -n
+    require_idle
+    download
+    [ -n "$dl_manifest" ] || exit 0
+    install_manifest "$dl_manifest"
+    rm -rf "$STATE/download"
+    ;;
+  install) [ -n "$arg" ] || usage; start -n; require_idle; install_manifest "$arg";;
+  usb) [ -n "$arg" ] || usage; start -w 900; usb;;
+  apply) [ -z "$arg" ] || usage; exec livi-os-slot reboot;;
+  *) usage;;
 esac
-device="$(readlink -f "/dev/disk/by-partuuid/$target")"
-[ -b "$device" ] || { echo "Inactive root device not found" >&2; exit 1; }
-image_size="$(stat -c %s "$image")"
-device_size="$(blockdev --getsize64 "$device")"
-[ "$image_size" -le "$device_size" ] || { echo "Image exceeds root slot" >&2; exit 1; }
-
-echo "Writing verified OS image to inactive slot $target"
-dd if="$image" of="$device" bs=4M conv=fsync
-expected="$(sha256sum "$image" | awk '{print $1}')"
-actual="$(head -c "$image_size" "$device" | sha256sum | awk '{print $1}')"
-[ "$actual" = "$expected" ] || { echo "Inactive-slot readback verification failed" >&2; exit 1; }
-
-livi-os-slot stage "$target" "$expected"
-echo "OS staged. Run livi-os-slot reboot to test it once; ordinary reboot keeps the previous root."

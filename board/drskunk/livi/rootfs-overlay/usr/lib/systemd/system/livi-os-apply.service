@@ -1,0 +1,13 @@
+[Unit]
+Description=Try a staged LIVI OS update before LIVI starts
+Requires=livi-os-slot.service
+After=livi-os-slot.service
+Before=livi.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/livi-os-slot apply-pending
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

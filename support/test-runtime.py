@@ -3,6 +3,7 @@
 
 import os
 import runpy
+import hashlib
 import json
 from unittest import mock
 from pathlib import Path
@@ -261,9 +262,69 @@ class DisplayReadiness(unittest.TestCase):
         self.assertNotEqual(self.run_check(audio=False), 0)
 
 
+class PostImage(unittest.TestCase):
+    def test_builds_boot_control_and_matching_slot_cmdlines(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp)
+            binaries = path / "images"
+            firmware = binaries / "rpi-firmware"
+            host = path / "host"
+            firmware.mkdir(parents=True)
+            (host / "sbin").mkdir(parents=True)
+            (host / "bin").mkdir()
+            (binaries / "Image").write_text("kernel")
+            (binaries / "board.dtb").write_text("dtb")
+            (firmware / "config.txt").write_text("kernel=Image\n")
+            (firmware / "cmdline.txt").write_text(
+                "root=PARTUUID=8d9f2f13-5a82-4fd8-93e7-88e7ea6118d2 rootfstype=squashfs ro\n")
+            (firmware / "start.elf").write_text("firmware")
+            mkfs = host / "sbin/mkfs.ext4"
+            mkfs.write_text('#!/bin/sh\nfor last; do :; done\n: > "$last"\n')
+            mkfs.chmod(0o755)
+            genimage = host / "bin/genimage"
+            genimage.write_text(
+                '#!/bin/sh\nwhile [ $# -gt 0 ]; do\n'
+                '  if [ "$1" = --config ]; then cp "$2" "$CAPTURE"; fi\n'
+                '  shift\ndone\n')
+            genimage.chmod(0o755)
+            capture = path / "genimage.cfg"
+            env = {
+                **os.environ,
+                "BR2_EXTERNAL_LIVI_OS_PATH": str(ROOT),
+                "BINARIES_DIR": str(binaries),
+                "BUILD_DIR": str(path / "build"),
+                "HOST_DIR": str(host),
+                "CAPTURE": str(capture),
+            }
+            script = ROOT / "board/drskunk/livi/post-image.sh"
+            for _ in range(2):
+                result = subprocess.run(["bash", str(script), "rpi5"], env=env,
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+            generated = capture.read_text()
+            self.assertIn('image = "boot-control.vfat"', generated)
+            self.assertIn('image = "boot.vfat"', generated)
+            self.assertIn('partition boot-a', generated)
+            self.assertIn('partition boot-b', generated)
+            self.assertIn('"rpi-firmware/cmdline-root-a.txt"', generated)
+            self.assertIn('"rpi-firmware/cmdline-root-b.txt"', generated)
+            config = (firmware / "config.txt").read_text()
+            self.assertEqual(config.count("[boot_partition=2]"), 1)
+            self.assertIn("cmdline=cmdline-root-a.txt", config)
+            self.assertIn("cmdline=cmdline-root-b.txt", config)
+            self.assertIn("root=PARTUUID=8d9f2f13-5a82-4fd8-93e7-88e7ea6118d2",
+                          (firmware / "cmdline-root-a.txt").read_text())
+            self.assertIn("root=PARTUUID=4af7b146-2c77-4808-881b-1e3ad8d15be8",
+                          (firmware / "cmdline-root-b.txt").read_text())
+            self.assertTrue((binaries / "autoboot.txt").exists())
+
+
 class TrialBoot(unittest.TestCase):
     ROOT_A = "8d9f2f13-5a82-4fd8-93e7-88e7ea6118d2"
     ROOT_B = "4af7b146-2c77-4808-881b-1e3ad8d15be8"
+    BOOT_A = 2
+    BOOT_B = 3
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -271,12 +332,15 @@ class TrialBoot(unittest.TestCase):
         self.path = Path(self.tmp.name)
         for name in ("boot", "run", "bin"):
             (self.path / name).mkdir()
-        self.default = self.path / "boot/cmdline.txt"
-        self.default.write_text(f"root=PARTUUID={self.ROOT_A} video=HDMI-A-1:400x1280@60D\n")
+        self.autoboot = self.path / "boot/autoboot.txt"
+        self.autoboot.write_text(
+            "[all]\ntryboot_a_b=1\nboot_partition=2\n[tryboot]\nboot_partition=3\n")
         self.cmdline = self.path / "proc-cmdline"
-        self.cmdline.write_text(self.default.read_text())
-        self.trial = self.path / "trial"
+        self.cmdline.write_text(f"root=PARTUUID={self.ROOT_A}\n")
+        self.trial = self.path / "tryboot"
         self.trial.write_bytes(b"\0\0\0\0")
+        self.partition = self.path / "partition"
+        self.partition.write_bytes(bytes.fromhex("00000002"))
         for command in ("mount", "sync", "flock", "reboot"):
             stub = self.path / "bin" / command
             stub.write_text('#!/bin/sh\nprintf "%s %s\\n" "${0##*/}" "$*" >> "$COMMAND_LOG"\n')
@@ -286,7 +350,8 @@ class TrialBoot(unittest.TestCase):
                   .replace("/boot/", str(self.path / "boot") + "/")
                   .replace("/run/", str(self.path / "run") + "/")
                   .replace("/proc/cmdline", str(self.cmdline))
-                  .replace("/proc/device-tree/chosen/bootloader/tryboot", str(self.trial)))
+                  .replace("/proc/device-tree/chosen/bootloader/",
+                           str(self.path) + "/"))
         self.script = self.path / "slot"
         self.script.write_text(script)
 
@@ -305,11 +370,10 @@ class TrialBoot(unittest.TestCase):
         self.slot("stage", self.ROOT_B, "test-hash")
 
     def test_staging_and_reboot_do_not_change_default(self):
-        original = self.default.read_text()
+        original = self.autoboot.read_text()
         self.stage()
         self.slot("reboot")
-        self.assertEqual(self.default.read_text(), original)
-        self.assertIn(self.ROOT_B, (self.path / "boot/cmdline-tryboot.txt").read_text())
+        self.assertEqual(self.autoboot.read_text(), original)
         self.assertIn("reboot 0 tryboot", (self.path / "commands").read_text())
         self.assertEqual((self.path / "data/pending").read_text().splitlines()[2], "1")
 
@@ -319,9 +383,11 @@ class TrialBoot(unittest.TestCase):
         self.cmdline.write_text(f"root=PARTUUID={self.ROOT_B}\n")
         self.slot("mark-good", success=False)
         self.trial.write_bytes(b"\0\0\0\1")
+        self.partition.write_bytes(bytes.fromhex("00000003"))
         self.slot("boot-check")
         self.slot("mark-good")
-        self.assertIn(self.ROOT_B, self.default.read_text())
+        self.assertIn("boot_partition=3", self.autoboot.read_text())
+        self.assertIn("[tryboot]\nboot_partition=2", self.autoboot.read_text())
         self.assertFalse((self.path / "data/pending").exists())
         self.assertTrue((self.path / "run/livi-os-confirmed").exists())
 
@@ -329,7 +395,7 @@ class TrialBoot(unittest.TestCase):
         self.stage()
         self.slot("reboot")
         self.slot("boot-check")
-        self.assertIn(self.ROOT_A, self.default.read_text())
+        self.assertIn("boot_partition=2", self.autoboot.read_text())
         self.assertFalse((self.path / "data/pending").exists())
         self.assertEqual(len(list((self.path / "data").glob("failed-*"))), 1)
 
@@ -349,6 +415,261 @@ class TrialBoot(unittest.TestCase):
         self.slot("stage", self.ROOT_A, "hash", success=False)
         self.stage()
         self.slot("stage", self.ROOT_B, "hash", success=False)
+
+    def reboots(self):
+        commands = self.path / "commands"
+        return commands.read_text().count("reboot ") if commands.exists() else 0
+
+    def test_staged_update_is_tried_once_at_boot(self):
+        self.slot("apply-pending")
+        self.assertEqual(self.reboots(), 0)
+        self.stage()
+        self.slot("apply-pending")
+        self.assertIn("reboot 0 tryboot", (self.path / "commands").read_text())
+        self.assertEqual((self.path / "data/pending").read_text().splitlines()[2], "1")
+        self.slot("apply-pending")
+        self.assertEqual(self.reboots(), 1)
+
+
+class OsUpdate(unittest.TestCase):
+    ROOT_A = TrialBoot.ROOT_A
+    ROOT_B = TrialBoot.ROOT_B
+    BOOT_A = "cbd67f9c-d8df-4ac4-a7bd-4da6f7a60316"
+    BOOT_B = "62194703-ff6d-4c28-9182-6ecdc15203bf"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.keys = tempfile.TemporaryDirectory()
+        keys = Path(cls.keys.name)
+        cls.private = keys / "private.pem"
+        cls.public = keys / "public.pem"
+        subprocess.run(["openssl", "genpkey", "-algorithm", "EC", "-pkeyopt",
+                        "ec_paramgen_curve:P-256", "-out", str(cls.private)], check=True,
+                       capture_output=True)
+        subprocess.run(["openssl", "pkey", "-in", str(cls.private), "-pubout", "-out", str(cls.public)],
+                       check=True, capture_output=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.keys.cleanup()
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name)
+        for name in ("lib", "state", "bin", "byuuid", "usbmnt", "fixtures", "stick/livi-update"):
+            (self.path / name).mkdir(parents=True)
+        self.lib = self.path / "lib"
+        self.state = self.path / "state"
+        (self.lib / "os-release").write_text("BOARD=rpi5\nVERSION=v1.0.0\nSERIAL=100\n")
+        (self.lib / "os-update.pem").write_text(self.public.read_text())
+        self.slot_b = self.path / "slot-b"
+        self.slot_b.write_bytes(b"\0" * 65536)
+        self.slot_a = self.path / "slot-a"
+        self.slot_a.write_bytes(b"\0" * 65536)
+        self.boot_slot_b = self.path / "boot-slot-b"
+        self.boot_slot_b.write_bytes(b"\0" * 65536)
+        self.boot_slot_a = self.path / "boot-slot-a"
+        self.boot_slot_a.write_bytes(b"\0" * 65536)
+        (self.path / "byuuid" / self.ROOT_B).symlink_to(self.slot_b)
+        (self.path / "byuuid" / self.ROOT_A).symlink_to(self.slot_a)
+        (self.path / "byuuid" / self.BOOT_B).symlink_to(self.boot_slot_b)
+        (self.path / "byuuid" / self.BOOT_A).symlink_to(self.boot_slot_a)
+        (self.path / "current").write_text(self.ROOT_A + "\n")
+        (self.path / "default").write_text(self.ROOT_A + "\n")
+        stubs = {
+            "livi-os-slot": 'case "$1" in current) cat "$T/current";; default) cat "$T/default";;'
+                            ' *) echo "$*" >> "$T/slot-log";; esac',
+            "flock": "exit 0",
+            "blockdev": 'case "$1" in --getsize64) wc -c < "$2" | tr -d " ";; esac',
+            "mount": 'for last; do :; done; rmdir "$last"; ln -s "$T/stick" "$last"',
+            "umount": 'rm -f "$1"',
+            "curl": 'out=""; url=""\nwhile [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift;;'
+                    ' http*) url="$1";; esac; shift; done\n'
+                    'src="$T/fixtures/${url##*/}"; [ -f "$src" ] || exit 22; cp "$src" "$out"',
+        }
+        for name, body in stubs.items():
+            stub = self.path / "bin" / name
+            stub.write_text("#!/bin/sh\n" + body + "\n")
+            stub.chmod(0o755)
+        script = ((SCRIPTS / "livi-os-update").read_text()
+                  .replace("/data/os-update", str(self.state))
+                  .replace("/usr/lib/livi", str(self.lib))
+                  .replace("/dev/disk/by-partuuid", str(self.path / "byuuid"))
+                  .replace("/run/livi-os-usb", str(self.path / "usbmnt"))
+                  .replace("/run/livi-os-update.lock", str(self.path / "lock"))
+                  .replace('[ -b "$root_device" ]', '[ -f "$root_device" ]')
+                  .replace('[ -b "$boot_device" ]', '[ -f "$boot_device" ]'))
+        self.script = self.path / "livi-os-update"
+        self.script.write_text(script)
+
+    def bundle(self, directory, image=None, **overrides):
+        image = image if image is not None else b"hsqs" + os.urandom(8188)
+        boot_image = b"boot" + os.urandom(8188)
+        directory = Path(directory)
+        (directory / "livi-os-rpi5-rootfs.squashfs").write_bytes(image)
+        (directory / "livi-os-rpi5-boot.vfat").write_bytes(boot_image)
+        manifest = {"format": 2, "board": "rpi5", "version": "v1.1.0", "serial": 200,
+                    "rootfs": {"file": "livi-os-rpi5-rootfs.squashfs", "size": len(image),
+                               "sha256": hashlib.sha256(image).hexdigest()},
+                    "bootfs": {"file": "livi-os-rpi5-boot.vfat", "size": len(boot_image),
+                               "sha256": hashlib.sha256(boot_image).hexdigest()}}
+        rootfs = overrides.pop("rootfs", {})
+        bootfs = overrides.pop("bootfs", {})
+        manifest.update(overrides)
+        manifest["rootfs"].update(rootfs)
+        manifest["bootfs"].update(bootfs)
+        target = directory / "livi-os-rpi5-update.json"
+        target.write_text(json.dumps(manifest))
+        subprocess.run(["openssl", "dgst", "-sha256", "-sign", str(self.private), "-out",
+                        f"{target}.sig", str(target)], check=True)
+        return target, image, boot_image
+
+    def run_update(self, *args, success=True):
+        result = subprocess.run(["sh", str(self.script), *args], capture_output=True, text=True,
+                                env={**os.environ, "T": str(self.path),
+                                     "PATH": f"{self.path}/bin:{os.environ['PATH']}"})
+        if success:
+            self.assertEqual(result.returncode, 0, result.stderr)
+        else:
+            self.assertNotEqual(result.returncode, 0, result.stderr)
+        return result
+
+    def slot_log(self):
+        log = self.path / "slot-log"
+        return log.read_text() if log.exists() else ""
+
+    def assert_installed(self, image, boot_image):
+        self.assertEqual(self.slot_b.read_bytes()[:len(image)], image)
+        self.assertEqual(self.boot_slot_b.read_bytes()[:len(boot_image)], boot_image)
+        sha = hashlib.sha256(image).hexdigest()
+        self.assertIn(f"stage {self.ROOT_B} {sha}", self.slot_log())
+        self.assertEqual(json.loads((self.state / "staged.json").read_text())["version"], "v1.1.0")
+
+    def test_signed_update_is_written_to_inactive_slot_and_staged(self):
+        manifest, image, boot_image = self.bundle(self.path)
+        self.run_update("install", str(manifest))
+        self.assert_installed(image, boot_image)
+        self.assertNotIn("reboot", self.slot_log())
+
+    def test_update_from_slot_b_targets_boot_and_root_slot_a(self):
+        (self.path / "current").write_text(self.ROOT_B + "\n")
+        (self.path / "default").write_text(self.ROOT_B + "\n")
+        manifest, image, boot_image = self.bundle(self.path)
+        self.run_update("install", str(manifest))
+        self.assertEqual(self.slot_a.read_bytes()[:len(image)], image)
+        self.assertEqual(self.boot_slot_a.read_bytes()[:len(boot_image)], boot_image)
+        self.assertIn(f"stage {self.ROOT_A} {hashlib.sha256(image).hexdigest()}",
+                      self.slot_log())
+
+    def test_tampered_manifest_is_rejected(self):
+        manifest, _, _ = self.bundle(self.path)
+        manifest.write_text(manifest.read_text().replace("v1.1.0", "v9.9.9"))
+        self.run_update("install", str(manifest), success=False)
+        self.assertEqual(self.slot_b.read_bytes(), b"\0" * 65536)
+        self.assertEqual(self.slot_log(), "")
+
+    def test_modified_image_is_not_staged(self):
+        manifest, image, _ = self.bundle(self.path)
+        (self.path / "livi-os-rpi5-rootfs.squashfs").write_bytes(image[:-1] + b"x")
+        result = self.run_update("install", str(manifest), success=False)
+        self.assertIn("readback", result.stderr)
+        self.assertEqual(self.slot_log(), "")
+
+    def test_modified_boot_image_is_not_staged(self):
+        manifest, _, boot_image = self.bundle(self.path)
+        (self.path / "livi-os-rpi5-boot.vfat").write_bytes(boot_image[:-1] + b"x")
+        result = self.run_update("install", str(manifest), success=False)
+        self.assertIn("readback", result.stderr)
+        self.assertEqual(self.slot_log(), "")
+
+    def test_downgrade_requires_explicit_permission(self):
+        manifest, image, boot_image = self.bundle(self.path, serial=50)
+        self.run_update("install", str(manifest), success=False)
+        self.run_update("install", str(manifest), "--allow-downgrade")
+        self.assert_installed(image, boot_image)
+
+    def test_installed_version_is_a_no_op(self):
+        manifest, _, _ = self.bundle(self.path, version="v1.0.0", serial=100)
+        self.run_update("install", str(manifest))
+        self.assertEqual(self.slot_log(), "")
+
+    def test_other_board_is_rejected(self):
+        manifest, _, _ = self.bundle(self.path, board="rpi4")
+        self.run_update("install", str(manifest), success=False)
+        self.assertEqual(self.slot_log(), "")
+
+    def test_unsafe_file_name_is_rejected(self):
+        manifest, _, _ = self.bundle(self.path, rootfs={"file": "../slot-b"})
+        self.run_update("install", str(manifest), success=False)
+        self.assertEqual(self.slot_log(), "")
+
+    def test_image_that_failed_its_trial_is_not_retried_implicitly(self):
+        manifest, image, boot_image = self.bundle(self.path)
+        sha = hashlib.sha256(image).hexdigest()
+        (self.state / "failed-1").write_text(f"{self.ROOT_B}\n{self.ROOT_A}\n1\n{sha}\n")
+        self.run_update("install", str(manifest), success=False)
+        self.run_update("install", str(manifest), "--retry-failed")
+        self.assert_installed(image, boot_image)
+
+    def test_refuses_while_update_pending_or_trial_unconfirmed(self):
+        manifest, _, _ = self.bundle(self.path)
+        (self.state / "pending").write_text("x\n")
+        self.run_update("install", str(manifest), success=False)
+        (self.state / "pending").unlink()
+        (self.path / "current").write_text(self.ROOT_B + "\n")
+        self.run_update("install", str(manifest), success=False)
+        self.assertEqual(self.slot_log(), "")
+
+    def test_github_update_downloads_verifies_and_stages(self):
+        fixtures = self.path / "fixtures"
+        _, image, boot_image = self.bundle(fixtures)
+        assets = [{"name": n, "browser_download_url": f"https://example.invalid/{n}"}
+                  for n in ("livi-os-rpi5-update.json", "livi-os-rpi5-update.json.sig",
+                            "livi-os-rpi5-rootfs.squashfs", "livi-os-rpi5-boot.vfat")]
+        (fixtures / "latest").write_text(json.dumps({"assets": assets}))
+        check = json.loads(self.run_update("check").stdout)
+        self.assertEqual(check, {"channel": "stable", "installed": "v1.0.0",
+                                 "available": "v1.1.0", "update": True})
+        self.run_update("update")
+        self.assert_installed(image, boot_image)
+        self.assertFalse((self.state / "download").exists())
+
+    def test_usb_stick_update_is_staged_and_tried_immediately(self):
+        _, image, boot_image = self.bundle(self.path / "stick/livi-update")
+        self.run_update("usb", "sda1")
+        self.assert_installed(image, boot_image)
+        self.assertTrue(self.slot_log().endswith("reboot\n"))
+
+    def test_usb_stick_without_update_is_ignored(self):
+        self.run_update("usb", "sda1")
+        self.assertEqual(self.slot_log(), "")
+
+    @unittest.skipUnless(subprocess.run(["sh", "-c", "command -v mksquashfs"],
+                                        capture_output=True).returncode == 0, "needs mksquashfs")
+    def test_release_bundle_tool_output_installs(self):
+        rootfs = self.path / "rootfs"
+        (rootfs / "usr/lib/livi").mkdir(parents=True)
+        (rootfs / "usr/lib/livi/os-release").write_text("BOARD=rpi5\nVERSION=v1.1.0\nSERIAL=200\n")
+        (rootfs / "usr/lib/livi/os-update.pem").write_text(self.public.read_text())
+        out = self.path / "output"
+        (out / "images").mkdir(parents=True)
+        subprocess.run(["mksquashfs", str(rootfs), str(out / "images/rootfs.squashfs"),
+                        "-noappend", "-quiet"], check=True, capture_output=True)
+        (out / "images/boot.vfat").write_bytes(b"bootfs-image")
+        self.slot_b.write_bytes(b"\0" * (out / "images/rootfs.squashfs").stat().st_size * 2)
+        make = ROOT / "support/make-os-update"
+        subprocess.run([str(make), str(out), str(self.private), str(out / "update")],
+                       check=True, capture_output=True)
+        self.run_update("install", str(out / "update/livi-os-rpi5-update.json"))
+        self.assert_installed((out / "images/rootfs.squashfs").read_bytes(), b"bootfs-image")
+        other = self.path / "other.pem"
+        subprocess.run(["openssl", "genpkey", "-algorithm", "EC", "-pkeyopt",
+                        "ec_paramgen_curve:P-256", "-out", str(other)], check=True, capture_output=True)
+        refused = subprocess.run([str(make), str(out), str(other), str(self.path / "x")],
+                                 capture_output=True, text=True)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("does not match", refused.stderr)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,58 @@
+#!/bin/sh
+# Creates the signed OS-update bundle for one built board:
+#   livi-os-BOARD-rootfs.squashfs, livi-os-BOARD-boot.vfat,
+#   livi-os-BOARD-update.json(.sig)
+# Upload all four to a GitHub release, or copy them to livi-update/ on a stick.
+set -eu
+
+out_base="${1:?usage: make-os-update OUTPUT_DIR SIGNING_KEY DESTINATION}"
+key="${2:?usage: make-os-update OUTPUT_DIR SIGNING_KEY DESTINATION}"
+dest="${3:?usage: make-os-update OUTPUT_DIR SIGNING_KEY DESTINATION}"
+rootfs="$out_base/images/rootfs.squashfs"
+bootfs="$out_base/images/boot.vfat"
+unsquashfs="$out_base/host/bin/unsquashfs"
+[ -x "$unsquashfs" ] || unsquashfs=unsquashfs
+[ -f "$rootfs" ] || { echo "missing $rootfs; build the board first" >&2; exit 1; }
+[ -f "$bootfs" ] || { echo "missing $bootfs; build the board first" >&2; exit 1; }
+[ -f "$key" ] || { echo "missing signing key $key" >&2; exit 1; }
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+from_image() { "$unsquashfs" -cat "$rootfs" "$1" 2>/dev/null; }
+from_image usr/lib/livi/os-release > "$tmp/os-release" || { echo "image has no os-release" >&2; exit 1; }
+from_image usr/lib/livi/os-update.pem > "$tmp/pubkey.pem" || {
+  echo "image has no OS-update public key; it could never install an update" >&2; exit 1;
+}
+
+openssl pkey -in "$key" -pubout -outform DER -out "$tmp/signing.der"
+openssl pkey -pubin -in "$tmp/pubkey.pem" -outform DER -out "$tmp/image.der"
+cmp -s "$tmp/signing.der" "$tmp/image.der" || {
+  echo "signing key does not match the public key embedded in the image" >&2; exit 1;
+}
+
+field() { sed -n "s/^$1=//p" "$tmp/os-release"; }
+board="$(field BOARD)"
+version="$(field VERSION)"
+serial="$(field SERIAL)"
+[ -n "$board" ] && [ -n "$version" ] && [ -n "$serial" ] || { echo "incomplete os-release" >&2; exit 1; }
+
+mkdir -p "$dest"
+root_name="livi-os-$board-rootfs.squashfs"
+boot_name="livi-os-$board-boot.vfat"
+cp "$rootfs" "$dest/$root_name"
+cp "$bootfs" "$dest/$boot_name"
+root_size="$(wc -c < "$dest/$root_name" | tr -d ' ')"
+root_sha="$(sha256sum "$dest/$root_name" | awk '{print $1}')"
+boot_size="$(wc -c < "$dest/$boot_name" | tr -d ' ')"
+boot_sha="$(sha256sum "$dest/$boot_name" | awk '{print $1}')"
+jq -n --arg board "$board" --arg version "$version" --argjson serial "$serial" \
+  --arg root_file "$root_name" --argjson root_size "$root_size" --arg root_sha "$root_sha" \
+  --arg boot_file "$boot_name" --argjson boot_size "$boot_size" --arg boot_sha "$boot_sha" \
+  '{format: 2, board: $board, version: $version, serial: $serial,
+    rootfs: {file: $root_file, size: $root_size, sha256: $root_sha},
+    bootfs: {file: $boot_file, size: $boot_size, sha256: $boot_sha}}' \
+  > "$dest/livi-os-$board-update.json"
+openssl dgst -sha256 -sign "$key" -out "$dest/livi-os-$board-update.json.sig" "$dest/livi-os-$board-update.json"
+openssl dgst -sha256 -verify "$tmp/pubkey.pem" -signature "$dest/livi-os-$board-update.json.sig" \
+  "$dest/livi-os-$board-update.json" >/dev/null
+echo "Created signed $version update for $board in $dest"

@@ -1,0 +1,9 @@
+[Unit]
+Description=Install a signed LIVI OS update from USB device %I
+Requires=livi-data-setup.service
+After=livi-data-setup.service livi-os-slot.service livi-os-apply.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/livi-os-update usb %I
+TimeoutStartSec=30min

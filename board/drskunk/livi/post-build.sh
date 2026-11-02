@@ -28,7 +28,7 @@ rm -f "$TARGET/etc/machine-id" "$TARGET/var/lib/dbus/machine-id"
 : > "$TARGET/etc/machine-id"
 
 mkdir -p "$TARGET/etc/systemd/system/multi-user.target.wants"
-for unit in seatd.service minidsp.service livi-data-grow.service livi-data-setup.service livi-os-slot.service livi-pipewire.service livi-pipewire-pulse.service livi-wireplumber.service livi.service; do
+for unit in seatd.service minidsp.service livi-data-grow.service livi-data-setup.service livi-os-slot.service livi-os-apply.service livi-pipewire.service livi-pipewire-pulse.service livi-wireplumber.service livi.service; do
   ln -snf "/usr/lib/systemd/system/$unit" "$TARGET/etc/systemd/system/multi-user.target.wants/$unit"
 done
 
@@ -36,10 +36,23 @@ mkdir -p "$TARGET/etc/systemd/system/sysinit.target.wants"
 ln -snf /usr/lib/systemd/system/livi-boot-deadline.timer \
   "$TARGET/etc/systemd/system/sysinit.target.wants/livi-boot-deadline.timer"
 
-# A root-only update must match the shared kernel, DTBs and boot configuration.
 mkdir -p "$TARGET/usr/lib/livi"
-(
-  cd "${BINARIES_DIR:?images directory missing}"
-  sha256sum Image ./*.dtb rpi-firmware/config.txt rpi-firmware/cmdline.txt
-) > "$TARGET/usr/lib/livi/boot-files.sha256"
-sha256sum "$TARGET/usr/lib/livi/boot-files.sha256" | awk '{print $1}' > "$TARGET/usr/lib/livi/boot-id"
+
+# OS identity used by livi-os-update for board matching and downgrade refusal.
+# SERIAL must increase between releases; CI passes the commit time.
+BOARD="${2:?board argument missing}"
+EXTERNAL="${BR2_EXTERNAL_LIVI_OS_PATH:?external tree missing}"
+VERSION="${LIVI_OS_VERSION:-$(git -C "$EXTERNAL" describe --tags --always --dirty 2>/dev/null || echo dev)}"
+SERIAL="${LIVI_OS_SERIAL:-$(git -C "$EXTERNAL" log -1 --format=%ct 2>/dev/null || date -u +%s)}"
+case "$SERIAL" in ''|*[!0-9]*) echo "LIVI_OS_SERIAL must be an integer" >&2; exit 1;; esac
+case "$VERSION" in *[!A-Za-z0-9._+-]*) echo "LIVI_OS_VERSION has unsupported characters" >&2; exit 1;; esac
+printf 'BOARD=%s\nVERSION=%s\nSERIAL=%s\n' "$BOARD" "$VERSION" "$SERIAL" > "$TARGET/usr/lib/livi/os-release"
+
+# The OS-update trust anchor lives on the immutable root, never on /data.
+PUBKEY="${LIVI_OS_UPDATE_PUBKEY:-$EXTERNAL/board/drskunk/livi/os-update.pem}"
+rm -f "$TARGET/usr/lib/livi/os-update.pem"
+if [ -f "$PUBKEY" ]; then
+  install -m 0644 "$PUBKEY" "$TARGET/usr/lib/livi/os-update.pem"
+else
+  echo "WARNING: no OS-update public key at $PUBKEY; signed OS updates are disabled in this image" >&2
+fi

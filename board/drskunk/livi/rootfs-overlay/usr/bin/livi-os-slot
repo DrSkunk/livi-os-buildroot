@@ -3,49 +3,91 @@ set -eu
 
 ROOT_A=8d9f2f13-5a82-4fd8-93e7-88e7ea6118d2
 ROOT_B=4af7b146-2c77-4808-881b-1e3ad8d15be8
+BOOT_A=2
+BOOT_B=3
 STATE=/data/os-update
 PENDING="$STATE/pending"
+AUTOBOOT=/boot/autoboot.txt
 
 current_uuid() {
   sed -n 's/.*root=PARTUUID=\([^ ]*\).*/\1/p' /proc/cmdline | tr 'A-F' 'a-f'
 }
-default_uuid() {
-  sed -n 's/.*root=PARTUUID=\([^ ]*\).*/\1/p' "$(cmdline_path)" | tr 'A-F' 'a-f'
-}
-is_trial() {
-  [ "$(od -An -tx1 /proc/device-tree/chosen/bootloader/tryboot 2>/dev/null | tr -d ' \n')" = 00000001 ]
-}
 valid_slot() {
   case "$1" in "$ROOT_A"|"$ROOT_B") return 0;; *) echo "Invalid root slot UUID" >&2; return 1;; esac
 }
-cmdline_path() {
-  for path in /boot/cmdline.txt /boot/rpi-firmware/cmdline.txt; do
-    [ -f "$path" ] && { printf '%s\n' "$path"; return; }
-  done
-  echo "Raspberry Pi cmdline.txt not found" >&2
-  return 1
+root_for_boot() {
+  case "$1" in
+    "$BOOT_A") printf '%s\n' "$ROOT_A";;
+    "$BOOT_B") printf '%s\n' "$ROOT_B";;
+    *) echo "Invalid boot partition: $1" >&2; return 1;;
+  esac
 }
-write_cmdline() {
-  uuid="$1" destination="$2"
-  valid_slot "$uuid"
-  path="$(cmdline_path)"
-  grep -Eq '(^| )root=PARTUUID=[^ ]+' "$path" || return 1
-  sed "s/root=PARTUUID=[^ ]*/root=PARTUUID=$uuid/" "$path" > "$destination.new"
-  chmod 0644 "$destination.new"
-  sync
-  mv -f "$destination.new" "$destination"
-  sync
+boot_for_root() {
+  case "$1" in
+    "$ROOT_A") printf '%s\n' "$BOOT_A";;
+    "$ROOT_B") printf '%s\n' "$BOOT_B";;
+    *) echo "Invalid root slot UUID" >&2; return 1;;
+  esac
 }
-boot_rw() {
+autoboot_partition() {
+  section="$1"
+  partition="$(awk -v wanted="[$section]" '
+    $0 == wanted { active=1; next }
+    /^\[/ { active=0 }
+    active && /^boot_partition=/ { sub(/^boot_partition=/, ""); print; exit }
+  ' "$AUTOBOOT")"
+  case "$partition" in "$BOOT_A"|"$BOOT_B") printf '%s\n' "$partition";;
+    *) echo "Invalid or missing [$section] boot_partition in $AUTOBOOT" >&2; return 1;;
+  esac
+}
+bootloader_value() {
+  name="$1"
+  path="/proc/device-tree/chosen/bootloader/$name"
+  [ -r "$path" ] || { echo "Bootloader property $name is unavailable" >&2; return 1; }
+  raw="$(od -An -v -tx1 "$path" | tr -d ' \n')"
+  case "$raw" in ''|*[!0-9a-fA-F]*) echo "Invalid bootloader property $name" >&2; return 1;; esac
+  [ "${#raw}" -eq 8 ] || { echo "Invalid bootloader property $name" >&2; return 1; }
+  printf '%d\n' "0x$raw"
+}
+current_boot_partition() { bootloader_value partition; }
+current_uuid_for_boot() { root_for_boot "$(current_boot_partition)"; }
+default_uuid() { root_for_boot "$(autoboot_partition all)"; }
+is_trial() {
+  [ "$(bootloader_value tryboot 2>/dev/null || echo 0)" = 1 ]
+}
+write_autoboot() {
+  default="$1" trial="$2"
+  case "$default" in "$BOOT_A"|"$BOOT_B");; *) echo "Invalid default boot partition" >&2; return 1;; esac
+  case "$trial" in "$BOOT_A"|"$BOOT_B");; *) echo "Invalid trial boot partition" >&2; return 1;; esac
+  [ "$default" != "$trial" ] || { echo "Default and trial boot partitions must differ" >&2; return 1; }
   mount -o remount,rw /boot
   trap 'mount -o remount,ro /boot 2>/dev/null || true' EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
-}
-boot_ro() {
+  printf '[all]\ntryboot_a_b=1\nboot_partition=%s\n[tryboot]\nboot_partition=%s\n' \
+    "$default" "$trial" > "$AUTOBOOT.new"
+  sync
+  mv -f "$AUTOBOOT.new" "$AUTOBOOT"
   sync
   mount -o remount,ro /boot
   trap - EXIT INT TERM
+}
+
+trial_reboot() {
+  target="$(sed -n '1p' "$PENDING")"
+  previous="$(sed -n '2p' "$PENDING")"
+  valid_slot "$target"
+  valid_slot "$previous"
+  [ "$(current_uuid)" = "$previous" ] || { echo "Not running the previous root" >&2; exit 1; }
+  [ "$(current_boot_partition)" = "$(autoboot_partition all)" ] ||
+    { echo "Not running the default boot partition" >&2; exit 1; }
+  [ "$(boot_for_root "$target")" = "$(autoboot_partition tryboot)" ] ||
+    { echo "The staged update is not the configured tryboot partition" >&2; exit 1; }
+  sed '3s/.*/1/' "$PENDING" > "$PENDING.new"
+  sync
+  mv -f "$PENDING.new" "$PENDING"
+  sync
+  reboot '0 tryboot'
 }
 
 # These commands must work even when /data cannot mount during a trial boot.
@@ -73,14 +115,11 @@ case "${1:-}" in
     valid_slot "$current"
     [ "$(default_uuid)" = "$current" ] || { echo "Confirm the active trial before staging another root" >&2; exit 1; }
     [ "$current" != "$target" ] || { echo "Refusing to stage the active root" >&2; exit 1; }
+    [ "$(boot_for_root "$target")" = "$(autoboot_partition tryboot)" ] ||
+      { echo "Target root does not match the configured tryboot partition" >&2; exit 1; }
+    [ "$(autoboot_partition all)" != "$(autoboot_partition tryboot)" ] ||
+      { echo "Default and tryboot boot partitions must differ" >&2; exit 1; }
     [ ! -e "$PENDING" ] || { echo "An OS update is already pending" >&2; exit 1; }
-    # Never change the default cmdline before successful validation.
-    boot_rw
-    write_cmdline "$target" /boot/cmdline-tryboot.txt
-    printf '[all]\ninclude config.txt\n[all]\ncmdline=cmdline-tryboot.txt\n' > /boot/tryboot.txt.new
-    sync
-    mv -f /boot/tryboot.txt.new /boot/tryboot.txt
-    boot_ro
     printf '%s\n%s\n0\n%s\n' "$target" "$current" "$expected" > "$PENDING.new"
     sync
     mv -f "$PENDING.new" "$PENDING"
@@ -88,17 +127,14 @@ case "${1:-}" in
     ;;
   reboot)
     [ -f "$PENDING" ] || { echo "No staged update" >&2; exit 1; }
-    target="$(sed -n '1p' "$PENDING")"
-    previous="$(sed -n '2p' "$PENDING")"
-    valid_slot "$target"
-    [ "$(current_uuid)" = "$previous" ] || { echo "Not running the previous root" >&2; exit 1; }
-    # Persist the attempt before handing over to firmware, so even failures
-    # before userspace can be recognized when the default root returns.
-    sed '3s/.*/1/' "$PENDING" > "$PENDING.new"
-    sync
-    mv -f "$PENDING.new" "$PENDING"
-    sync
-    reboot '0 tryboot'
+    trial_reboot
+    ;;
+  apply-pending)
+    [ -f "$PENDING" ] || exit 0
+    [ "$(sed -n '3p' "$PENDING")" = 0 ] || exit 0
+    if is_trial; then exit 0; fi
+    echo "Trying the staged OS update" >&2
+    trial_reboot
     ;;
   boot-check)
     [ -f "$PENDING" ] || exit 0
@@ -106,14 +142,20 @@ case "${1:-}" in
     previous="$(sed -n '2p' "$PENDING")"
     attempted="$(sed -n '3p' "$PENDING")"
     current="$(current_uuid)"
+    current_boot="$(current_boot_partition)"
     valid_slot "$target"
     valid_slot "$previous"
     if [ "$current" = "$previous" ] && [ "$attempted" = 1 ]; then
+      [ "$current_boot" = "$(autoboot_partition all)" ] ||
+        { echo "Returned to the previous root from the wrong boot partition" >&2; exit 1; }
       mv -f "$PENDING" "$STATE/failed-$(date +%s)"
       sync
       echo "Returned to previous root after unconfirmed trial" >&2
     elif [ "$current" = "$target" ]; then
       is_trial || { echo "Candidate did not boot through tryboot" >&2; exit 1; }
+      [ "$current_boot" = "$(boot_for_root "$target")" ] &&
+        [ "$current_boot" = "$(autoboot_partition tryboot)" ] ||
+        { echo "Candidate booted from the wrong boot partition" >&2; exit 1; }
     fi
     ;;
   mark-good)
@@ -121,9 +163,12 @@ case "${1:-}" in
       current="$(current_uuid)"
       [ "$current" = "$(sed -n '1p' "$PENDING")" ] || exit 0
       is_trial || { echo "Refusing to commit a non-trial candidate" >&2; exit 1; }
-      boot_rw
-      write_cmdline "$current" "$(cmdline_path)"
-      boot_ro
+      current_boot="$(current_boot_partition)"
+      [ "$current_boot" = "$(boot_for_root "$current")" ] &&
+        [ "$current_boot" = "$(autoboot_partition tryboot)" ] ||
+        { echo "Refusing to commit a candidate from the wrong boot partition" >&2; exit 1; }
+      default_boot="$(autoboot_partition all)"
+      write_autoboot "$current_boot" "$default_boot"
       printf '%s\n' "$current" > "$STATE/good-slot.new"
       sync
       mv -f "$STATE/good-slot.new" "$STATE/good-slot"
@@ -141,7 +186,7 @@ case "${1:-}" in
     sync
     ;;
   *)
-    echo "usage: livi-os-slot {current|default|stage UUID HASH|reboot|boot-check|boot-failed|boot-timeout|mark-good|cancel}" >&2
+    echo "usage: livi-os-slot {current|default|stage UUID HASH|reboot|apply-pending|boot-check|boot-failed|boot-timeout|mark-good|cancel}" >&2
     exit 2
     ;;
 esac

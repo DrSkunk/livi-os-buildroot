@@ -5,3 +5,6 @@
 /artifacts/*.AppImage
 *.img
 *.img.xz
+
+# OS-update signing keys must never be committed; only os-update.pem (public).
+*private*.pem

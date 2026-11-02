@@ -268,48 +268,132 @@ factory image as the initial known-good version.
 
 ## Operating-system A/B updates
 
-The disk contains two equal SquashFS root slots. The initial default is slot A; an OS
-update is written only to the inactive slot. Provision an RSA or EC public key at
-`/data/os-update/trusted.pem`, then install a signed SquashFS image with:
+The disk has paired boot and SquashFS root slots plus a boot-control partition:
 
-```sh
-livi-os-update /data/os-update/rootfs.squashfs /data/os-update/rootfs.sig
-livi-os-slot reboot
+| Partition | Purpose |
+|---|---|
+| 1 | FAT boot control, including `autoboot.txt` |
+| 2 / 3 | Boot slots A / B (firmware, DTBs, kernel and slot-specific cmdline) |
+| 4 / 5 | SquashFS root slots A / B |
+| 6 | Persistent data |
+
+The bootloader selects slot A by default and slot B for a one-shot tryboot. The
+boot image chooses the matching root by boot-partition number. An update writes
+the inactive boot and root images, verifies both by readback, and stages the pair
+for trial. Only after health checks pass does the OS swap the default and
+tryboot boot-partition numbers in `autoboot.txt`.
+
+Updates come from a GitHub release or a USB stick and use the same signed bundle,
+one per board:
+
+```text
+livi-os-rpi5-update.json        manifest: board, version, serial and both image hashes
+livi-os-rpi5-update.json.sig    signature over the manifest
+livi-os-rpi5-rootfs.squashfs    root image named by the manifest
+livi-os-rpi5-boot.vfat          boot image named by the manifest
 ```
 
-Sign on a trusted development machine with the corresponding private key:
+This partition layout changes the full disk image. Devices flashed with the
+earlier single-boot-partition layout need a one-time full reflash before they
+can install these updates.
+
+### Signing setup
+
+Create a key pair once on a trusted machine. Store the private key in a 1Password
+Document and commit only the public key; the image embeds it read-only at
+`/usr/lib/livi/os-update.pem`. Images built without it cannot install OS updates.
 
 ```sh
-openssl dgst -sha256 -sign release-private.pem \
-  -out rootfs.sig rootfs.squashfs
+(
+  set -eu
+  umask 077
+  pub=board/drskunk/livi/os-update.pem
+  [ ! -e "$pub" ] || { echo "Public key exists; not overwriting it" >&2; exit 1; }
+  key_dir="$(mktemp -d "${TMPDIR:-/tmp}/livi-os-signing.XXXXXX")"
+  printf 'Private key: %s/private.pem\n' "$key_dir"
+  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 \
+    -out "$key_dir/private.pem"
+  openssl pkey -in "$key_dir/private.pem" -pubout -out "$pub"
+)
 ```
 
-The updater takes a private snapshot, verifies its signature, checks that its
-boot fingerprint matches the installed kernel/DTBs/boot configuration, writes
-the inactive root and verifies every byte by hash. Concurrent updates and updates
-from an unconfirmed root are rejected. Kernel or boot-configuration changes
-require installing a complete disk image; the root-only updater cannot replace
-the shared boot artifacts safely.
+After saving and verifying the private key in 1Password, remove the local copy. With
+the 1Password CLI and GitHub CLI authenticated, stream the Document directly into
+the repository secret in Bash or Zsh (replace the item, vault and repository):
 
-Staging writes `cmdline-tryboot.txt` and `tryboot.txt`, leaving the normal
-`cmdline.txt` unchanged. `livi-os-slot reboot` requests a one-shot Raspberry Pi
-trial boot. An ordinary reboot does not start the trial. The new root becomes
-the default only after 60 consecutive successful application/display/audio
-health checks, with an initial startup allowance of 60 seconds. A failed trial
-returns to the previous default on reset, including failures before userspace.
-Use `livi-os-slot cancel` from the previous root to discard a staged update.
+```sh
+(
+  set -o pipefail
+  op document get "<Item>" --vault "<Vault>" |
+    gh secret set LIVI_OS_SIGNING_KEY -R DrSkunk/livi-os-buildroot
+)
+```
+
+This keeps the key out of the repository and avoids a temporary plaintext file, but
+GitHub will hold its own encrypted copy. The workflow uses it only on `main` and
+version-tag builds and skips signed update assets if the secret or public key is
+missing. Protect `main` and the `v*` release tags, and limit who can change workflows
+or trigger those builds: code running in an eligible workflow can use the signing
+secret. CI then attaches the signed bundle for each board to the nightly or tagged
+release.
+
+Locally, after `make pi5`:
+
+```sh
+make pi5-update LIVI_OS_SIGNING_KEY=livi-os-private.pem   # output/pi5/update/
+```
+
+The tool refuses to sign when the key does not match the image's embedded public key.
+`LIVI_OS_VERSION` and `LIVI_OS_SERIAL` override the version (default `git describe`)
+and the ordering serial (default commit time).
+
+### Installing
+
+```sh
+livi-os-update status              # installed version, slot, staged update
+livi-os-update check               # newest release on the channel
+livi-os-update update              # download, verify and stage it
+livi-os-update apply               # try it now instead of at the next power-on
+```
+
+The channel is `stable` (latest GitHub release) unless `/data/os-update/channel`
+contains `nightly`, or `--channel` is given. Downloads go to `/data/os-update/download`
+and resume after interruption. `/data/os-update/repo` overrides the release
+repository; only bundles signed with the embedded key are accepted.
+
+For a USB update, copy the four files of the device's board into `livi-update/` on a
+FAT32, exFAT or ext4 stick and insert it. The stick is mounted read-only, the update
+is staged, and the trial boot starts immediately. Remove the stick afterwards; a stick
+holding the installed version is ignored. A manually copied bundle can also be
+installed with `livi-os-update install /path/livi-os-rpi5-update.json`.
+
+The updater verifies the manifest signature, checks the board, refuses older
+serials (unless `--allow-downgrade`) and images whose trial already failed (unless
+`--retry-failed`). It writes the inactive boot and root slots and verifies both
+readbacks against the signed hashes. Concurrent updates and updates from an
+unconfirmed root are rejected.
+
+A staged update is tried once at the next power-on, before LIVI starts, through
+the Raspberry Pi bootloader's A/B tryboot mode (`livi-os-update apply` or
+`livi-os-slot reboot` starts it immediately). The new boot/root pair becomes the
+default only after 60 consecutive successful application/display/audio health
+checks, with an initial startup allowance of 60 seconds. A failed trial returns
+to the previous default on reset, including failures before userspace. Use
+`livi-os-slot cancel` from the previous root to discard a staged update.
 
 Critical service failures and an unconfirmed trial's three-minute boot deadline
 request a reset. Both images enable `kernel_watchdog_timeout=120` and systemd's
 runtime watchdog; `panic=10` also reboots after a kernel panic. Provision a current
-Pi EEPROM with `BOOT_WATCHDOG_TIMEOUT=120` for watchdog coverage before the kernel
-starts. This EEPROM setting is separate from the disk image and must be verified
-on the board. See the [Raspberry Pi tryboot/watchdog documentation](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html).
+Pi 4 EEPROM bootloader with A/B tryboot support and `BOOT_WATCHDOG_TIMEOUT=120`
+for watchdog coverage before the kernel starts. EEPROM configuration is separate
+from the disk image and must be verified on each board. See the [Raspberry Pi
+`autoboot.txt` documentation](https://www.raspberrypi.com/documentation/computers/config_txt.html#autoboot-txt)
+and [watchdog documentation](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html).
 
-The boot FAT filesystem is remounted writable only while staging or confirming.
-Its shared firmware and FAT metadata are still a single point of failure: trial
-boot does not protect against media corruption or a power cut damaging FAT during
-confirmation. Test reset and power-loss recovery on the deployment hardware.
+The control FAT filesystem is remounted writable only while committing a
+confirmed update. The active boot slot is never modified during an update, but
+the small control partition remains a single point of failure. Test reset and
+power-loss recovery on the deployment hardware.
 
 ## Configuration recovery
 
