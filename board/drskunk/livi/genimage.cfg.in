@@ -1,6 +1,6 @@
 image boot-control.vfat {
 	vfat {
-		label = "LIVI_BOOTCTL"
+		label = "LIVI_BTCTL"
 		files = { "autoboot.txt" }
 	}
 	size = 64M

@@ -20,6 +20,13 @@ done
 
 for modules in "$TARGET"/lib/modules/*; do
   [ -d "$modules/kernel" ] || continue
+  if find "$modules/kernel" -name '*.ko.xz' -print -quit | grep -q .; then
+    if ! "${HOST_DIR:?Buildroot host directory missing}/bin/kmod" --version | grep -q '+XZ'; then
+      echo "Host kmod lacks XZ support required to index compressed kernel modules: $modules" >&2
+      echo "Rebuild it with: make -C buildroot O=\"$(dirname "$TARGET")\" host-kmod-reconfigure" >&2
+      exit 1
+    fi
+  fi
   [ -s "$modules/modules.dep" ] && [ -s "$modules/modules.alias.bin" ] || {
     echo "Kernel modules have no dependency/alias index: $modules" >&2
     exit 1
