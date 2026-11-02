@@ -133,7 +133,7 @@ Buildroot is pinned to `2026.05.1` and its exact commit is verified by the wrapp
 make bootstrap
 
 # DrSkunk/LIVI currently publishes the ARM64 build on its nightly release tag.
-make fetch-livi LIVI_CHANNEL=nightly
+make fetch-livi
 make check-livi
 
 make pi4
@@ -146,6 +146,12 @@ Outputs:
 output/pi4/images/livi-os-rpi4.img
 output/pi5/images/livi-os-rpi5.img
 ```
+
+`make fetch-livi` (or `support/fetch-livi` with no arguments) defaults to
+`nightly`, matching the published ARM64 release and CI. Override it with
+`LIVI_CHANNEL=stable` for GitHub's latest non-prerelease (currently unavailable),
+or `LIVI_CHANNEL=<tag>` for a specific release. Run `make test-fetch-livi` to
+check release selection offline.
 
 `make fetch-livi` validates the AppImage type and AArch64 ELF machine and writes
 a local SHA-256 file. Both fetch and package installation reject payloads without
@@ -180,7 +186,7 @@ docker build --platform linux/amd64 -t livi-build -f support/Dockerfile .
 docker volume create livi-build
 docker run --rm --platform linux/amd64 \
   -v "$PWD:/workspace" -v livi-build:/build livi-build \
-  sh -ec 'make fetch-livi LIVI_CHANNEL=nightly;
+  sh -ec 'make fetch-livi;
           make pi4 BUILDROOT_DIR=/build/buildroot OUTPUT_BASE=/build/output'
 ```
 

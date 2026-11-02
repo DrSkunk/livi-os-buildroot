@@ -54,6 +54,9 @@ jobs:
       - name: Test runtime recovery
         run: make test-runtime
 
+      - name: Test LIVI release selection
+        run: make test-fetch-livi
+
       - name: Select boards
         id: boards
         env:

@@ -3,11 +3,11 @@ BUILDROOT_COMMIT := cb857ba4c87a93e5265a9e4a3f32071abf39e14a
 BUILDROOT_DIR := $(CURDIR)/buildroot
 OUTPUT_BASE := $(CURDIR)/output
 LIVI_REPO ?= DrSkunk/LIVI
-LIVI_CHANNEL ?= stable
+LIVI_CHANNEL ?= nightly
 LIVI_OS_SIGNING_KEY ?=
 LIVI_APPIMAGE ?= artifacts/LIVI-arm64.AppImage
 
-.PHONY: help bootstrap pi4_defconfig pi5_defconfig pi4 pi5 pi4-update pi5-update menuconfig linux-menuconfig clean fetch-livi check check-livi test-runtime
+.PHONY: help bootstrap pi4_defconfig pi5_defconfig pi4 pi5 pi4-update pi5-update menuconfig linux-menuconfig clean fetch-livi check check-livi test-runtime test-fetch-livi
 
 help:
 	@echo "make bootstrap       Clone and verify Buildroot $(BUILDROOT_VERSION)"
@@ -18,6 +18,7 @@ help:
 	@echo "make check           Validate both defconfigs and project scripts"
 	@echo "make check-livi      Validate the local Rust/API-2 AppImage before building"
 	@echo "make test-runtime    Test runtime configuration and recovery"
+	@echo "make test-fetch-livi Test release selection without downloading an AppImage"
 
 bootstrap:
 	@if test -d "$(BUILDROOT_DIR)/.git" && test "$$(git -C "$(BUILDROOT_DIR)" rev-parse HEAD)" != "$(BUILDROOT_COMMIT)"; then \
@@ -58,6 +59,9 @@ check: bootstrap
 
 test-runtime:
 	python3 support/test-runtime.py
+
+test-fetch-livi:
+	sh support/test-fetch-livi.sh
 
 clean:
 	$(MAKE) -C "$(BUILDROOT_DIR)" O="$(OUTPUT_BASE)/pi4" clean 2>/dev/null || true

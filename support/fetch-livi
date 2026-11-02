@@ -2,7 +2,7 @@
 set -eu
 
 repo="${1:-DrSkunk/LIVI}"
-channel="${2:-stable}"
+channel="${2:-nightly}"
 destination="${3:-artifacts/LIVI-arm64.AppImage}"
 
 case "$channel" in
@@ -20,7 +20,7 @@ tmp_json="$(mktemp)"
 tmp_image="$(mktemp)"
 trap 'rm -f "$tmp_json" "$tmp_image"' EXIT
 curl -fsSL -H 'Accept: application/vnd.github+json' "$api" -o "$tmp_json"
-url="$(sed -n 's/.*"browser_download_url": *"\([^"]*\(arm64\|aarch64\)\.AppImage\)".*/\1/p' "$tmp_json" | head -1)"
+url="$(sed -En 's/.*"browser_download_url": *"([^"]*(arm64|aarch64)\.AppImage)".*/\1/p' "$tmp_json" | head -1)"
 [ -n "$url" ] || { echo "No ARM64 AppImage in $channel release of $repo" >&2; exit 1; }
 
 echo "Downloading $url"
