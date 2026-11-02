@@ -1,1 +1,1 @@
-root=PARTUUID=8d9f2f13-5a82-4fd8-93e7-88e7ea6118d2 rootfstype=squashfs ro rootwait console=tty1 console=ttyAMA0,115200 quiet loglevel=3 vt.global_cursor_default=0 fsck.mode=force livi.grow_data=1 video=HDMI-A-1:400x1280@60D fbcon=rotate:1 panic=10
+root=PARTUUID=8d9f2f13-5a82-4fd8-93e7-88e7ea6118d2 rootfstype=squashfs ro rootwait console=ttyS0,115200 quiet loglevel=3 logo.nologo systemd.show_status=false vt.global_cursor_default=0 fsck.mode=force livi.grow_data=1 video=HDMI-A-1:400x1280@60D fbcon=rotate:1 panic=10

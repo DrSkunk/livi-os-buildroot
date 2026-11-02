@@ -1,2 +1,6 @@
-Cmnd_Alias LIVI_HELPER = /usr/bin/python3 *livi-helper.py
-livi ALL=(root) NOPASSWD: SETENV: LIVI_HELPER
+Cmnd_Alias LIVI_HELPER = /usr/libexec/livi-projection-helper
+livi ALL=(root) NOPASSWD: NOSETENV: LIVI_HELPER
+Cmnd_Alias LIVI_CAN_CAPTURE = /usr/libexec/livi-can-capture
+livi ALL=(root) NOPASSWD: NOSETENV: LIVI_CAN_CAPTURE
+Cmnd_Alias LIVI_BOOT_HEALTH = /usr/bin/livi-os-slot mark-good, /usr/bin/livi-os-slot boot-failed
+livi ALL=(root) NOPASSWD: NOSETENV: LIVI_BOOT_HEALTH

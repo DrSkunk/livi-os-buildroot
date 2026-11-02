@@ -1,0 +1,30 @@
+From: LIVI OS maintainers <livi-os@localhost>
+Subject: [PATCH] Link libsystemd after objects with Automake LDADD
+
+Putting libraries in LDFLAGS places them before objects. With --as-needed
+this discards libsystemd before resolving sd_notify and sd_bus references.
+
+Upstream-Status: Pending
+Signed-off-by: LIVI OS maintainers <livi-os@localhost>
+---
+ Makefile.am | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/Makefile.am b/Makefile.am
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -11,12 +11,12 @@
+ psplash_write_SOURCES = psplash-write.c psplash.h
+ 
+ if HAVE_SYSTEMD
+ psplash_CPPFLAGS = $(SYSTEMD_CFLAGS) -DHAVE_SYSTEMD
+-psplash_LDFLAGS= $(SYSTEMD_LIBS)
++psplash_LDADD = $(SYSTEMD_LIBS)
+ bin_PROGRAMS += psplash-systemd
+ psplash_systemd_CPPFLAGS = $(SYSTEMD_CFLAGS)
+-psplash_systemd_LDFLAGS= $(SYSTEMD_LIBS)
++psplash_systemd_LDADD = $(SYSTEMD_LIBS)
+ psplash_systemd_SOURCES = psplash-systemd.c psplash.h
+ endif
+ 
+ EXTRA_DIST = make-image-header.sh

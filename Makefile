@@ -5,8 +5,9 @@ OUTPUT_BASE := $(CURDIR)/output
 LIVI_REPO ?= DrSkunk/LIVI
 LIVI_CHANNEL ?= stable
 LIVI_OS_SIGNING_KEY ?=
+LIVI_APPIMAGE ?= artifacts/LIVI-arm64.AppImage
 
-.PHONY: help bootstrap pi4_defconfig pi5_defconfig pi4 pi5 pi4-update pi5-update menuconfig linux-menuconfig clean fetch-livi check
+.PHONY: help bootstrap pi4_defconfig pi5_defconfig pi4 pi5 pi4-update pi5-update menuconfig linux-menuconfig clean fetch-livi check check-livi test-runtime
 
 help:
 	@echo "make bootstrap       Clone and verify Buildroot $(BUILDROOT_VERSION)"
@@ -15,11 +16,13 @@ help:
 	@echo "make pi5             Build output/pi5/images/livi-os-rpi5.img"
 	@echo "make pi5-update      Sign an OS update (LIVI_OS_SIGNING_KEY=private.pem)"
 	@echo "make check           Validate both defconfigs and project scripts"
+	@echo "make check-livi      Validate the local Rust/API-2 AppImage before building"
+	@echo "make test-runtime    Test runtime configuration and recovery"
 
 bootstrap:
 	@if test -d "$(BUILDROOT_DIR)/.git" && test "$$(git -C "$(BUILDROOT_DIR)" rev-parse HEAD)" != "$(BUILDROOT_COMMIT)"; then \
-		echo "Buildroot revision changed; refreshing clone"; \
-		rm -rf "$(BUILDROOT_DIR)"; \
+		echo "Unexpected Buildroot revision in $(BUILDROOT_DIR); move it aside before bootstrapping." >&2; \
+		exit 1; \
 	fi
 	@test -d "$(BUILDROOT_DIR)/.git" || git clone --depth 1 --branch "$(BUILDROOT_VERSION)" https://gitlab.com/buildroot.org/buildroot.git "$(BUILDROOT_DIR)"
 	@test "$$(git -C "$(BUILDROOT_DIR)" rev-parse HEAD)" = "$(BUILDROOT_COMMIT)" || { echo "Unexpected Buildroot revision" >&2; exit 1; }
@@ -32,8 +35,13 @@ pi4_defconfig pi5_defconfig: bootstrap
 	@board="$(@:_defconfig=)"; \
 	$(MAKE) -C "$(BUILDROOT_DIR)" O="$(OUTPUT_BASE)/$$board" BR2_EXTERNAL="$(CURDIR)" "livi_r$${board}_defconfig"
 
+check-livi:
+	python3 support/check-rust-payload --appimage "$(LIVI_APPIMAGE)"
+
 pi4: pi4_defconfig
-	$(MAKE) -C "$(BUILDROOT_DIR)" O="$(OUTPUT_BASE)/pi4" BR2_EXTERNAL="$(CURDIR)"
+	# OpenSSH configure needs the target compiler driver to supply its sysroot headers.
+	$(MAKE) -C "$(BUILDROOT_DIR)" O="$(OUTPUT_BASE)/pi4" BR2_EXTERNAL="$(CURDIR)" \
+		TARGET_CPP="$(OUTPUT_BASE)/pi4/host/bin/aarch64-linux-gcc -E"
 
 pi5: pi5_defconfig
 	$(MAKE) -C "$(BUILDROOT_DIR)" O="$(OUTPUT_BASE)/pi5" BR2_EXTERNAL="$(CURDIR)"
@@ -46,7 +54,10 @@ menuconfig linux-menuconfig: bootstrap
 	$(MAKE) -C "$(BUILDROOT_DIR)" O="$(OUTPUT_BASE)/pi5" BR2_EXTERNAL="$(CURDIR)" $@
 
 check: bootstrap
-	./support/check-project
+	BUILDROOT_DIR="$(BUILDROOT_DIR)" OUTPUT_BASE="$(OUTPUT_BASE)" ./support/check-project
+
+test-runtime:
+	python3 support/test-runtime.py
 
 clean:
 	$(MAKE) -C "$(BUILDROOT_DIR)" O="$(OUTPUT_BASE)/pi4" clean 2>/dev/null || true

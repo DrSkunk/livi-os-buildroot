@@ -17,7 +17,7 @@ atomic_copy() {
   cp "$src" "$dest.new" && chmod 0755 "$dest.new" && sync && mv -f "$dest.new" "$dest" && sync
 }
 
-mkdir -p "$APP_DIR" "$STATE" /data/livi/config /data/livi/cache /run/user/1000
+mkdir -p "$APP_DIR" "$STATE" /data/livi/home /data/livi/config /data/livi/cache /run/user/1000
 if [ ! -x "$CURRENT" ]; then
   echo "Installing factory LIVI image"
   atomic_copy "$FACTORY" "$CURRENT" || exit 1
@@ -61,8 +61,15 @@ if [ "$current_hash" != "$good_hash" ]; then
   fi
 fi
 
-/usr/bin/livi-config-guard restore
-runtime="$(mktemp -d /run/livi-supervisor.XXXXXX)" || exit 1
+/usr/bin/livi-config-guard restore || {
+  echo "Failed to restore LIVI configuration" >&2
+  exit 1
+}
+/usr/bin/livi-config-guard initialize || {
+  echo "Failed to initialize LIVI configuration" >&2
+  exit 1
+}
+runtime="$(mktemp -d /run/user/1000/livi-supervisor.XXXXXX)" || exit 1
 fatal_log="$runtime/fatal"
 mkfifo "$runtime/output" || exit 1
 # shellcheck disable=SC2317,SC2329 # invoked indirectly via trap
@@ -79,7 +86,19 @@ trap 'exit 130' INT
 logger_pid=$!
 
 chown livi:livi "$CURRENT"
-su -s /bin/bash -c "HOME=/home/livi TMPDIR=/data/livi/update XDG_RUNTIME_DIR=/run/user/1000 XDG_CONFIG_HOME=/data/livi/config XDG_CACHE_HOME=/data/livi/cache ELECTRON_OZONE_PLATFORM_HINT=wayland ELECTRON_ENABLE_LOGGING=1 LIVI_KIOSK=1 cage -s -- '$CURRENT'" livi >"$runtime/output" 2>&1 &
+cat /proc/sys/kernel/random/uuid > /run/user/1000/livi-os-session || exit 1
+rm -f /run/user/1000/livi-os-ready.json
+unset WAYLAND_DISPLAY DISPLAY
+HOME=/data/livi/home TMPDIR=/data/livi/update XDG_RUNTIME_DIR=/run/user/1000 \
+  XDG_CONFIG_HOME=/data/livi/config XDG_CACHE_HOME=/data/livi/cache \
+  XDG_DATA_HOME=/data/livi/state \
+  XKB_CONFIG_ROOT=/usr/share/X11/xkb \
+  LIVI_OS_API=2 LIVI_COMPOSITOR_BACKEND=drm \
+  LIVI_MAIN_CONNECTOR=HDMI-A-1 LIVI_DISPLAY_MODE=400x1280@60 \
+  LIVI_MAIN_TRANSFORM=90 LIVI_MAIN_SCALE=1 \
+  LIVI_OS_READY_FILE=/run/user/1000/livi-os-ready.json \
+  LIVI_OS_SESSION_FILE=/run/user/1000/livi-os-session \
+  LIVI_KIOSK=1 LIVI_OS=1 dbus-run-session -- "$CURRENT" >"$runtime/output" 2>&1 &
 kiosk_pid=$!
 /usr/bin/livi-config-guard watch &
 guard_pid=$!
@@ -89,8 +108,7 @@ ready=0
 for ((second=0; second<STARTUP_SECONDS+HEALTH_SECONDS; second++)); do
   if ! kill -0 "$kiosk_pid" "$logger_pid" 2>/dev/null; then break; fi
   if [ -e "$fatal_log" ]; then break; fi
-  if [ -S /run/user/1000/wayland-0 ] && pgrep -u livi -f 'LIVI.AppImage' >/dev/null 2>&1 &&
-      su -s /bin/sh -c /usr/libexec/livi-kiosk-ready livi >/dev/null 2>&1; then
+  if /usr/libexec/livi-kiosk-ready >/dev/null 2>&1; then
     ready=$((ready + 1))
   else
     ready=0
@@ -117,9 +135,9 @@ if [ "$healthy" -eq 1 ]; then
     rm -f "$STATE/pending"
     sync
   fi
-  /usr/bin/livi-os-slot mark-good || exit 1
+  /usr/bin/sudo -n /usr/bin/livi-os-slot mark-good || exit 1
 else
-  /usr/bin/livi-os-slot boot-failed || true
+  /usr/bin/sudo -n /usr/bin/livi-os-slot boot-failed || true
   # A failed health window must trigger Restart=always and candidate rollback.
   # Do not leave a live but unhealthy kiosk running indefinitely.
   kill "$kiosk_pid" "$guard_pid" 2>/dev/null || true
@@ -129,6 +147,10 @@ fi
 
 while kill -0 "$kiosk_pid" 2>/dev/null; do
   kill -0 "$logger_pid" 2>/dev/null || { echo "Kiosk log writer failed" >&2; exit 1; }
+  if [ -e "$fatal_log" ] || ! /usr/libexec/livi-kiosk-ready; then
+    echo "LIVI lost display/audio/application readiness" >&2
+    exit 1
+  fi
   sleep 1
 done
 wait "$kiosk_pid"

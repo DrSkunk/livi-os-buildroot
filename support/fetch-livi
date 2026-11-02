@@ -8,7 +8,12 @@ destination="${3:-artifacts/LIVI-arm64.AppImage}"
 case "$channel" in
   stable) api="https://api.github.com/repos/$repo/releases/latest" ;;
   nightly) api="https://api.github.com/repos/$repo/releases/tags/nightly" ;;
-  *) echo "channel must be stable or nightly" >&2; exit 2 ;;
+  *)
+    case "$channel" in
+      ''|*[!A-Za-z0-9._-]*) echo "Invalid LIVI release tag: $channel" >&2; exit 2 ;;
+    esac
+    api="https://api.github.com/repos/$repo/releases/tags/$channel"
+    ;;
 esac
 
 tmp_json="$(mktemp)"
@@ -24,6 +29,9 @@ magic="$(dd if="$tmp_image" bs=1 skip=8 count=3 2>/dev/null | od -An -tx1 | tr -
 [ "$magic" = 414902 ] || { echo "Downloaded file is not an AppImage type 2 payload" >&2; exit 1; }
 machine="$(readelf -h "$tmp_image" 2>/dev/null | sed -n 's/^ *Machine: *//p')"
 case "$machine" in AArch64*) ;; *) echo "Unexpected AppImage architecture: $machine" >&2; exit 1;; esac
+root="$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)"
+python3 -c 'import pathlib, runpy, sys; runpy.run_path(sys.argv[1])["check_appimage"](pathlib.Path(sys.argv[2]))' \
+  "$root/support/check-rust-payload" "$tmp_image"
 mkdir -p "$(dirname "$destination")"
 chmod 0755 "$tmp_image"
 mv "$tmp_image" "$destination"

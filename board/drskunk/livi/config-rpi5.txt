@@ -1,6 +1,7 @@
 kernel=Image
 arm_64bit=1
 disable_overscan=1
+disable_splash=1
 dtoverlay=vc4-kms-v3d-pi5,cma-512
 max_framebuffers=3
 disable_fw_kms_setup=1

@@ -1,0 +1,25 @@
+#!/bin/sh
+set -eu
+
+key_dir=/data/livi/ssh
+key="$key_dir/ssh_host_ed25519_key"
+public_key="$key.pub"
+
+mkdir -p "$key_dir"
+chown root:root "$key_dir"
+chmod 0700 "$key_dir"
+
+if [ -s "$key" ] && [ -s "$public_key" ]; then
+  exit 0
+fi
+
+rm -f "$key" "$public_key"
+temporary_dir="$(mktemp -d "$key_dir/.hostkey.XXXXXX")"
+trap 'rm -rf "$temporary_dir"' EXIT
+ssh-keygen -q -t ed25519 -N '' -f "$temporary_dir/ssh_host_ed25519_key"
+chmod 0600 "$temporary_dir/ssh_host_ed25519_key"
+chmod 0644 "$temporary_dir/ssh_host_ed25519_key.pub"
+mv "$temporary_dir/ssh_host_ed25519_key" "$key"
+mv "$temporary_dir/ssh_host_ed25519_key.pub" "$public_key"
+chown root:root "$key" "$public_key"
+sync
