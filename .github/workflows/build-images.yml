@@ -7,6 +7,16 @@ on:
     tags:
       - "v*.*.*"
   workflow_dispatch:
+    inputs:
+      board:
+        description: Board to build
+        type: choice
+        options: [both, pi4, pi5]
+        default: both
+      livi_release:
+        description: LIVI release tag to embed
+        type: string
+        default: nightly
 
 concurrency:
   group: livi-images-${{ github.ref }}
@@ -22,6 +32,8 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+    outputs:
+      matrix: ${{ steps.boards.outputs.matrix }}
     steps:
       - name: Check out source
         uses: actions/checkout@v6.0.2
@@ -41,6 +53,19 @@ jobs:
 
       - name: Test runtime recovery
         run: python3 support/test-runtime.py
+
+      - name: Select boards
+        id: boards
+        env:
+          BOARD: ${{ inputs.board || 'both' }}
+        run: |
+          case "$BOARD" in
+            pi4) boards='["pi4"]' ;;
+            pi5) boards='["pi5"]' ;;
+            both) boards='["pi4","pi5"]' ;;
+            *) echo "Unsupported board: $BOARD" >&2; exit 1 ;;
+          esac
+          echo "matrix={\"board\":$boards}" >> "$GITHUB_OUTPUT"
 
       - name: Create draft release
         if: github.ref_type == 'tag'
@@ -69,7 +94,7 @@ jobs:
           fi
 
   build:
-    name: Build ${{ matrix.name }}
+    name: Build ${{ matrix.board }}
     needs: prepare
     runs-on: ubuntu-24.04
     permissions:
@@ -77,16 +102,9 @@ jobs:
     strategy:
       fail-fast: false
       max-parallel: 2
-      matrix:
-        include:
-          - board: pi4
-            name: Raspberry Pi 4
-            image: livi-os-rpi4.img
-          - board: pi5
-            name: Raspberry Pi 5
-            image: livi-os-rpi5.img
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     env:
-      LIVI_CHANNEL: nightly
+      LIVI_CHANNEL: ${{ inputs.livi_release || 'nightly' }}
     steps:
       - name: Check out source
         uses: actions/checkout@v6.0.2
@@ -117,7 +135,7 @@ jobs:
           restore-keys: |
             buildroot-ccache-${{ runner.os }}-${{ matrix.board }}-
 
-      - name: Download and validate LIVI nightly
+      - name: Download and validate LIVI AppImage
         run: make fetch-livi
 
       - name: Build image
@@ -134,7 +152,7 @@ jobs:
 
       - name: Compress and checksum image
         env:
-          IMAGE: ${{ matrix.image }}
+          IMAGE: livi-os-r${{ matrix.board }}.img
           BOARD: ${{ matrix.board }}
         run: |
           image_path="output/$BOARD/images/$IMAGE"
@@ -157,12 +175,22 @@ jobs:
           trap 'rm -f "$key"' EXIT
           sh ./support/make-os-update "output/$BOARD" "$key" "output/$BOARD/update"
 
+      - name: Upload flashable image
+        uses: actions/upload-artifact@v6
+        with:
+          name: livi-os-r${{ matrix.board }}
+          path: |
+            output/${{ matrix.board }}/images/livi-os-r${{ matrix.board }}.img.xz
+            output/${{ matrix.board }}/images/livi-os-r${{ matrix.board }}.img.xz.sha256
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Upload release assets
         if: github.ref_type == 'tag' || github.ref_name == 'main'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || 'nightly' }}
-          IMAGE: ${{ matrix.image }}
+          IMAGE: livi-os-r${{ matrix.board }}.img
           BOARD: ${{ matrix.board }}
         run: |
           gh release upload "$RELEASE_TAG" \

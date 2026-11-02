@@ -39,7 +39,7 @@ for executable in bin/bash usr/bin/stat usr/bin/dbus-run-session usr/bin/pipewir
   usr/bin/pipewire-pulse usr/bin/wireplumber usr/bin/jq usr/bin/unsquashfs \
   usr/bin/pactl usr/bin/xdg-user-dir usr/libexec/livi-projection-helper usr/lib/livi/livi-helperd \
   usr/bin/python3 usr/libexec/livi-can-capture usr/libexec/livi-ssh-hostkey \
-  usr/local/lib/livi/livi-touch-filter; do
+  usr/local/lib/livi/livi-touch-filter usr/bin/retroarch; do
   [ -x "$TARGET/$executable" ] || {
     echo "Required runtime executable missing: /$executable" >&2
     exit 1
@@ -67,6 +67,13 @@ for library in $(printf '%s\n' "$helper_dynamic" | sed -n 's/.*(NEEDED).*\[\([^]
   esac
   [ -e "$TARGET/usr/lib/$library" ] || [ -e "$TARGET/lib/$library" ] || {
     echo "Immutable Rust helper dependency missing: $library" >&2
+    exit 1
+  }
+done
+
+for asset in glui/font.ttf glui/back.png ozone/regular.ttf; do
+  [ -s "$TARGET/usr/share/retroarch/assets/$asset" ] || {
+    echo "Required RetroArch menu asset missing: $asset" >&2
     exit 1
   }
 done

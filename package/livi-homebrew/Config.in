@@ -1,0 +1,6 @@
+config BR2_PACKAGE_LIVI_HOMEBREW
+	bool "LIVI starter homebrew games"
+	depends on BR2_PACKAGE_LIVI_LIBRETRO_CORES
+	help
+	  Red Rod Racing and Tobu Tobu Girl for the Game Boy, with credits
+	  and ready-to-play playlists. ROMs are copied to LIVI_DATA on boot.

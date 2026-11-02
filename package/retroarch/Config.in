@@ -12,6 +12,8 @@ config BR2_PACKAGE_RETROARCH
 	select BR2_PACKAGE_PIPEWIRE
 	select BR2_PACKAGE_WAYLAND
 	select BR2_PACKAGE_ZLIB
+	select BR2_PACKAGE_RETROARCH_ASSETS
+	select BR2_PACKAGE_RETROARCH_JOYPAD_AUTOCONFIG
 	help
 	  RetroArch frontend built for Wayland, OpenGL ES 3, udev input and
 	  ALSA. Cores and mutable assets are stored on LIVI_DATA.

@@ -1,0 +1,41 @@
+#!/bin/sh
+set -eu
+
+config="${1:-/data/games/retroarch/retroarch.cfg}"
+defaults="${2:-/usr/share/livi/retroarch.cfg}"
+marker="${3:-/data/livi/state/retroarch-touch-v2}"
+
+[ ! -e "$marker" ] || exit 0
+mkdir -p "$(dirname "$config")" "$(dirname "$marker")"
+source=/dev/null
+if [ -f "$config" ]; then
+  source="$config"
+  [ -e "$config.before-touch-v2" ] || cp -p "$config" "$config.before-touch-v2"
+fi
+
+# Repair menu/input/assets once; keep unrelated settings and user directory choices.
+awk '
+  FNR == NR { defaults[$1] = $0; next }
+  /^[[:space:]]*[a-z_]+[[:space:]]*=/ {
+    key = $0
+    sub(/^[[:space:]]*/, "", key)
+    sub(/[[:space:]]*=.*/, "", key)
+    if (key in defaults) {
+      if (!seen[key]++) {
+        if (key ~ /^(video_driver|video_fullscreen|input_driver|menu_driver|menu_pointer_enable|menu_mouse_enable|assets_directory)$/)
+          print defaults[key]
+        else
+          print
+      }
+      next
+    }
+  }
+  { print }
+  END { for (key in defaults) if (!seen[key]) print defaults[key] }
+' "$defaults" "$source" > "$config.new"
+chmod 0600 "$config.new"
+sync
+mv -f "$config.new" "$config"
+sync
+touch "$marker"
+sync
