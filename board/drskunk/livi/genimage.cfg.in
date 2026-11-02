@@ -1,3 +1,11 @@
+image boot-control.vfat {
+	vfat {
+		label = "LIVI_BOOTCTL"
+		files = { "autoboot.txt" }
+	}
+	size = 64M
+}
+
 image boot.vfat {
 	vfat {
 		label = "LIVI_BOOT"
@@ -5,7 +13,7 @@ image boot.vfat {
 #BOOT_FILES#
 		}
 	}
-	size = 256M
+	size = 128M
 }
 
 image livi-os-#BOARD#.img {
@@ -13,9 +21,22 @@ image livi-os-#BOARD#.img {
 		partition-table-type = "gpt"
 	}
 
-	partition boot {
+	partition boot-control {
 		partition-type-uuid = U
 		partition-uuid = "9fa21264-f0d8-41f0-a83a-4f85d8224a8b"
+		image = "boot-control.vfat"
+	}
+
+	partition boot-a {
+		partition-type-uuid = U
+		partition-uuid = "cbd67f9c-d8df-4ac4-a7bd-4da6f7a60316"
+		image = "boot.vfat"
+		bootable = true
+	}
+
+	partition boot-b {
+		partition-type-uuid = U
+		partition-uuid = "62194703-ff6d-4c28-9182-6ecdc15203bf"
 		image = "boot.vfat"
 		bootable = true
 	}

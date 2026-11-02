@@ -4,14 +4,16 @@ BUILDROOT_DIR := $(CURDIR)/buildroot
 OUTPUT_BASE := $(CURDIR)/output
 LIVI_REPO ?= DrSkunk/LIVI
 LIVI_CHANNEL ?= stable
+LIVI_OS_SIGNING_KEY ?=
 
-.PHONY: help bootstrap pi4_defconfig pi5_defconfig pi4 pi5 menuconfig linux-menuconfig clean fetch-livi check
+.PHONY: help bootstrap pi4_defconfig pi5_defconfig pi4 pi5 pi4-update pi5-update menuconfig linux-menuconfig clean fetch-livi check
 
 help:
 	@echo "make bootstrap       Clone and verify Buildroot $(BUILDROOT_VERSION)"
 	@echo "make fetch-livi      Download the current ARM64 LIVI AppImage"
 	@echo "make pi4             Build output/pi4/images/livi-os-rpi4.img"
 	@echo "make pi5             Build output/pi5/images/livi-os-rpi5.img"
+	@echo "make pi5-update      Sign an OS update (LIVI_OS_SIGNING_KEY=private.pem)"
 	@echo "make check           Validate both defconfigs and project scripts"
 
 bootstrap:
@@ -35,6 +37,10 @@ pi4: pi4_defconfig
 
 pi5: pi5_defconfig
 	$(MAKE) -C "$(BUILDROOT_DIR)" O="$(OUTPUT_BASE)/pi5" BR2_EXTERNAL="$(CURDIR)"
+
+pi4-update pi5-update:
+	@test -n "$(LIVI_OS_SIGNING_KEY)" || { echo "Set LIVI_OS_SIGNING_KEY=path/to/private.pem" >&2; exit 1; }
+	sh ./support/make-os-update "$(OUTPUT_BASE)/$(@:-update=)" "$(LIVI_OS_SIGNING_KEY)" "$(OUTPUT_BASE)/$(@:-update=)/update"
 
 menuconfig linux-menuconfig: bootstrap
 	$(MAKE) -C "$(BUILDROOT_DIR)" O="$(OUTPUT_BASE)/pi5" BR2_EXTERNAL="$(CURDIR)" $@

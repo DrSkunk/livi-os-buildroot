@@ -31,7 +31,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
             bc bison build-essential cpio file flex gettext git libncurses-dev \
-            libssl-dev jq python3 rsync unzip wget xz-utils
+            libssl-dev jq python3 rsync squashfs-tools unzip wget xz-utils
 
       - name: Bootstrap Buildroot
         run: make bootstrap
@@ -121,7 +121,16 @@ jobs:
         run: make fetch-livi
 
       - name: Build image
-        run: make "${{ matrix.board }}"
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            export LIVI_OS_VERSION="$GITHUB_REF_NAME"
+          else
+            export LIVI_OS_VERSION="nightly-${GITHUB_SHA::7}"
+          fi
+          # Commit time orders releases for the on-device downgrade check.
+          LIVI_OS_SERIAL="$(git log -1 --format=%ct)"
+          export LIVI_OS_SERIAL
+          make "${{ matrix.board }}"
 
       - name: Compress and checksum image
         env:
@@ -132,6 +141,21 @@ jobs:
           test -s "$image_path"
           xz --threads=0 --compress --keep --force -6 "$image_path"
           sha256sum "$image_path.xz" > "$image_path.xz.sha256"
+
+      - name: Create signed OS update
+        if: github.ref_type == 'tag' || github.ref_name == 'main'
+        env:
+          BOARD: ${{ matrix.board }}
+          LIVI_OS_SIGNING_KEY: ${{ secrets.LIVI_OS_SIGNING_KEY }}
+        run: |
+          if [ -z "$LIVI_OS_SIGNING_KEY" ] || [ ! -f board/drskunk/livi/os-update.pem ]; then
+            echo "::warning::LIVI_OS_SIGNING_KEY secret or board/drskunk/livi/os-update.pem missing; no OTA update published"
+            exit 0
+          fi
+          key="$RUNNER_TEMP/livi-os-signing.pem"
+          (umask 077; printf '%s\n' "$LIVI_OS_SIGNING_KEY" > "$key")
+          trap 'rm -f "$key"' EXIT
+          sh ./support/make-os-update "output/$BOARD" "$key" "output/$BOARD/update"
 
       - name: Upload release assets
         if: github.ref_type == 'tag' || github.ref_name == 'main'
@@ -145,6 +169,15 @@ jobs:
             "output/$BOARD/images/$IMAGE.xz" \
             "output/$BOARD/images/$IMAGE.xz.sha256" \
             --clobber
+          update="output/$BOARD/update"
+          if [ -d "$update" ]; then
+            # Images first: devices fetch the signed manifest, then both files it names.
+            gh release upload "$RELEASE_TAG" \
+              "$update"/livi-os-*-rootfs.squashfs \
+              "$update"/livi-os-*-boot.vfat \
+              --clobber
+            gh release upload "$RELEASE_TAG" "$update"/livi-os-*-update.json "$update"/livi-os-*-update.json.sig --clobber
+          fi
 
   publish:
     name: Publish GitHub Release

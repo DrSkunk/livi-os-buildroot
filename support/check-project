@@ -4,7 +4,7 @@ set -eu
 root="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 failed=0
 
-for script in $(find "$root/board" "$root/support" -type f \( -name '*.sh' -o -path '*/init.d/*' -o -path '*/usr/bin/livi-*' -o -path '*/usr/libexec/livi-*' -o -name 'fetch-livi' -o -name 'check-project' \)); do
+for script in $(find "$root/board" "$root/support" -type f \( -name '*.sh' -o -path '*/init.d/*' -o -path '*/usr/bin/livi-*' -o -path '*/usr/libexec/livi-*' -o -name 'fetch-livi' -o -name 'check-project' -o -name 'make-os-update' \)); do
   if head -n1 "$script" | grep -q python3; then
     python3 -c 'import ast, pathlib, sys; ast.parse(pathlib.Path(sys.argv[1]).read_text())' "$script" || failed=1
     continue
@@ -21,12 +21,25 @@ done
 for required in \
   board/drskunk/livi/rootfs-overlay/usr/bin/livi-os-slot \
   board/drskunk/livi/rootfs-overlay/usr/bin/livi-os-update \
-  board/drskunk/livi/rootfs-overlay/usr/bin/livi-data-grow; do
+  board/drskunk/livi/rootfs-overlay/usr/bin/livi-data-grow \
+  support/make-os-update; do
   test -x "$root/$required" || { echo "not executable: $required" >&2; failed=1; }
+  # CI checks out the mode recorded in git, not the local file mode.
+  mode="$(git -C "$root" ls-files -s -- "$required" 2>/dev/null | cut -d' ' -f1)"
+  if [ -n "$mode" ] && [ "$mode" != 100755 ]; then
+    echo "not executable in git index ($mode): $required" >&2
+    failed=1
+  fi
 done
 
 grep -q 'partition root-a' "$root/board/drskunk/livi/genimage.cfg.in" || failed=1
 grep -q 'partition root-b' "$root/board/drskunk/livi/genimage.cfg.in" || failed=1
+grep -q 'partition boot-control' "$root/board/drskunk/livi/genimage.cfg.in" || failed=1
+grep -q 'partition boot-a' "$root/board/drskunk/livi/genimage.cfg.in" || failed=1
+grep -q 'partition boot-b' "$root/board/drskunk/livi/genimage.cfg.in" || failed=1
+grep -q '^tryboot_a_b=1$' "$root/board/drskunk/livi/autoboot.txt" || failed=1
+grep -q '^boot_partition=2$' "$root/board/drskunk/livi/autoboot.txt" || failed=1
+grep -q '^boot_partition=3$' "$root/board/drskunk/livi/autoboot.txt" || failed=1
 grep -q 'livi.grow_data=1' "$root/board/drskunk/livi/cmdline-rpi4.txt" || failed=1
 grep -q 'livi.grow_data=1' "$root/board/drskunk/livi/cmdline-rpi5.txt" || failed=1
 
@@ -50,6 +63,18 @@ for symbol in CONFIG_DRM_VC4 CONFIG_INPUT_EVDEV CONFIG_HID CONFIG_HID_GENERIC CO
     failed=1
   }
 done
+
+for symbol in CONFIG_USB_STORAGE CONFIG_EXFAT_FS CONFIG_NLS_CODEPAGE_437 CONFIG_NLS_ISO8859_1; do
+  grep -qx "$symbol=y" "$root/board/drskunk/livi/linux.fragment" || {
+    echo "missing USB OS-update kernel option: $symbol" >&2
+    failed=1
+  }
+done
+
+grep -q 'livi-os-apply.service' "$root/board/drskunk/livi/post-build.sh" || {
+  echo "staged OS updates would never be applied at boot" >&2
+  failed=1
+}
 
 grep -q '^livi 1000 livi 1000 ' "$root/board/drskunk/livi/users.txt" || {
   echo "LIVI UID/GID must match /run/user/1000" >&2
