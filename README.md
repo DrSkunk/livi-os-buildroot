@@ -299,8 +299,8 @@ can install these updates.
 
 ### Signing setup
 
-Create a key pair once on a trusted machine. Store the private key in a 1Password
-Document and commit only the public key; the image embeds it read-only at
+Create a key pair once on a trusted machine. Store the private key securely outside
+the repository and commit only the public key; the image embeds it read-only at
 `/usr/lib/livi/os-update.pem`. Images built without it cannot install OS updates.
 
 ```sh
@@ -317,20 +317,16 @@ Document and commit only the public key; the image embeds it read-only at
 )
 ```
 
-After saving and verifying the private key in 1Password, remove the local copy. With
-the 1Password CLI and GitHub CLI authenticated, stream the Document directly into
-the repository secret in Bash or Zsh (replace the item, vault and repository):
+After backing up and verifying the private key in your secure storage, set the
+repository secret from its local file using the GitHub CLI:
 
 ```sh
-(
-  set -o pipefail
-  op document get "<Item>" --vault "<Vault>" |
-    gh secret set LIVI_OS_SIGNING_KEY -R DrSkunk/livi-os-buildroot
-)
+gh secret set LIVI_OS_SIGNING_KEY -R DrSkunk/livi-os-buildroot \
+  < /path/to/livi-os-private.pem
 ```
 
-This keeps the key out of the repository and avoids a temporary plaintext file, but
-GitHub will hold its own encrypted copy. The workflow uses it only on `main` and
+This keeps the key out of the repository, but GitHub will hold its own encrypted
+copy. The workflow uses it only on `main` and
 version-tag builds and skips signed update assets if the secret or public key is
 missing. Protect `main` and the `v*` release tags, and limit who can change workflows
 or trigger those builds: code running in an eligible workflow can use the signing
