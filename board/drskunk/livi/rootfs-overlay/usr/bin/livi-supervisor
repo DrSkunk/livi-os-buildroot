@@ -61,7 +61,14 @@ if [ "$current_hash" != "$good_hash" ]; then
   fi
 fi
 
-/usr/bin/livi-config-guard restore
+/usr/bin/livi-config-guard restore || {
+  echo "Failed to restore LIVI configuration" >&2
+  exit 1
+}
+/usr/bin/livi-config-guard initialize || {
+  echo "Failed to initialize LIVI configuration" >&2
+  exit 1
+}
 runtime="$(mktemp -d /run/user/1000/livi-supervisor.XXXXXX)" || exit 1
 fatal_log="$runtime/fatal"
 mkfifo "$runtime/output" || exit 1

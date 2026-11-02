@@ -7,7 +7,7 @@ LIVI_CHANNEL ?= stable
 LIVI_OS_SIGNING_KEY ?=
 LIVI_APPIMAGE ?= artifacts/LIVI-arm64.AppImage
 
-.PHONY: help bootstrap pi4_defconfig pi5_defconfig pi4 pi5 pi4-update pi5-update menuconfig linux-menuconfig clean fetch-livi check check-livi
+.PHONY: help bootstrap pi4_defconfig pi5_defconfig pi4 pi5 pi4-update pi5-update menuconfig linux-menuconfig clean fetch-livi check check-livi test-runtime
 
 help:
 	@echo "make bootstrap       Clone and verify Buildroot $(BUILDROOT_VERSION)"
@@ -17,6 +17,7 @@ help:
 	@echo "make pi5-update      Sign an OS update (LIVI_OS_SIGNING_KEY=private.pem)"
 	@echo "make check           Validate both defconfigs and project scripts"
 	@echo "make check-livi      Validate the local Rust/API-2 AppImage before building"
+	@echo "make test-runtime    Test runtime configuration and recovery"
 
 bootstrap:
 	@if test -d "$(BUILDROOT_DIR)/.git" && test "$$(git -C "$(BUILDROOT_DIR)" rev-parse HEAD)" != "$(BUILDROOT_COMMIT)"; then \
@@ -54,6 +55,9 @@ menuconfig linux-menuconfig: bootstrap
 
 check: bootstrap
 	BUILDROOT_DIR="$(BUILDROOT_DIR)" OUTPUT_BASE="$(OUTPUT_BASE)" ./support/check-project
+
+test-runtime:
+	python3 support/test-runtime.py
 
 clean:
 	$(MAKE) -C "$(BUILDROOT_DIR)" O="$(OUTPUT_BASE)/pi4" clean 2>/dev/null || true

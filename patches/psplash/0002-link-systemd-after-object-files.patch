@@ -13,7 +13,9 @@ Signed-off-by: LIVI OS maintainers <livi-os@localhost>
 diff --git a/Makefile.am b/Makefile.am
 --- a/Makefile.am
 +++ b/Makefile.am
-@@ -13,8 +13,8 @@
+@@ -11,12 +11,12 @@
+ psplash_write_SOURCES = psplash-write.c psplash.h
+ 
  if HAVE_SYSTEMD
  psplash_CPPFLAGS = $(SYSTEMD_CFLAGS) -DHAVE_SYSTEMD
 -psplash_LDFLAGS= $(SYSTEMD_LIBS)
@@ -24,3 +26,5 @@ diff --git a/Makefile.am b/Makefile.am
 +psplash_systemd_LDADD = $(SYSTEMD_LIBS)
  psplash_systemd_SOURCES = psplash-systemd.c psplash.h
  endif
+ 
+ EXTRA_DIST = make-image-header.sh

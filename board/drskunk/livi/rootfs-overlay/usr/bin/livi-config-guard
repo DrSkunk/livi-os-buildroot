@@ -2,6 +2,7 @@
 
 CONFIG=/data/livi/config/LIVI/config.json
 BACKUP=/data/livi/config/config.json.last-good
+DEFAULT=/usr/share/livi/config-default.json
 
 valid() { [ -s "$1" ] && jq -e 'type == "object"' "$1" >/dev/null 2>&1; }
 backup() {
@@ -18,9 +19,31 @@ restore() {
   fi
 }
 
+initialize() (
+  if [ -e "$CONFIG" ] || [ -L "$CONFIG" ] || [ -e "$BACKUP" ] || [ -L "$BACKUP" ]; then
+    exit 0
+  fi
+  if ! valid "$DEFAULT"; then
+    echo "Missing or invalid LIVI configuration defaults: $DEFAULT" >&2
+    exit 1
+  fi
+  umask 077
+  mkdir -p "$(dirname "$CONFIG")" || exit 1
+  temporary="$(mktemp "${CONFIG}.new.XXXXXX")" || exit 1
+  trap 'rm -f "$temporary"' 0
+  if ! cp "$DEFAULT" "$temporary" || ! chmod 0600 "$temporary" ||
+      ! sync || ! ln "$temporary" "$CONFIG" || ! rm -f "$temporary" || ! sync; then
+    echo "Failed to install LIVI configuration defaults: $CONFIG" >&2
+    exit 1
+  fi
+  trap - 0
+  echo "Initialized LIVI display defaults"
+)
+
 case "${1:-}" in
   restore) restore ;;
+  initialize) initialize ;;
   watch) while sleep 5; do backup; done ;;
   backup) backup ;;
-  *) echo "usage: livi-config-guard {restore|watch|backup}" >&2; exit 2 ;;
+  *) echo "usage: livi-config-guard {restore|initialize|watch|backup}" >&2; exit 2 ;;
 esac

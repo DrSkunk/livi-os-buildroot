@@ -14,8 +14,8 @@ if [ ! -e /data/livi/config/LIVI/config.json ] && [ ! -e /data/livi/config/confi
   password="$(openssl rand -hex 16)"
   seed="$(mktemp /data/livi/config/LIVI/.config.XXXXXX)"
   trap 'rm -f "$seed"' EXIT
-  jq -n --arg password "$password" \
-    '{wifiPassword: $password, country: "CA", mainScreenWidth: 1280, mainScreenHeight: 400, kiosk: {main: true, dash: false, aux: false}}' > "$seed"
+  jq -en --slurpfile defaults /usr/share/livi/config-default.json --arg password "$password" \
+    '$defaults[0] + {wifiPassword: $password, country: "CA", mainScreenWidth: 1280, mainScreenHeight: 400, kiosk: {main: true, dash: false, aux: false}}' > "$seed"
   sync
   mv "$seed" /data/livi/config/LIVI/config.json
   sync

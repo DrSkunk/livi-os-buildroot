@@ -52,7 +52,7 @@ jobs:
         run: make check
 
       - name: Test runtime recovery
-        run: python3 support/test-runtime.py
+        run: make test-runtime
 
       - name: Select boards
         id: boards

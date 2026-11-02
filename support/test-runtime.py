@@ -19,6 +19,12 @@ import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "board/drskunk/livi/rootfs-overlay/usr/bin"
+DISPLAY_DEFAULTS = {
+    "projectionWidth": 1280,
+    "projectionHeight": 400,
+    "clusterWidth": 1280,
+    "clusterHeight": 400,
+}
 
 
 class BootSplash(unittest.TestCase):
@@ -244,6 +250,8 @@ class ApplianceFirstBootDefaults(unittest.TestCase):
         source = source[:source.index("\nmerge_dir()")]
         self.script = self.path / "setup"
         self.script.write_text(source.replace("/data/", f"{self.data}/")
+                               .replace("/usr/share/livi/config-default.json",
+                                        str(SCRIPTS.parent / "share/livi/config-default.json"))
                                .replace("/run/user/1000", str(self.path / "runtime")))
 
     def seed(self):
@@ -255,6 +263,8 @@ class ApplianceFirstBootDefaults(unittest.TestCase):
         config = json.loads(self.config.read_text())
         self.assertEqual(config["country"], "CA")
         self.assertEqual((config["mainScreenWidth"], config["mainScreenHeight"]), (1280, 400))
+        for key, value in DISPLAY_DEFAULTS.items():
+            self.assertEqual(config[key], value)
         self.assertTrue(config["kiosk"]["main"])
         self.assertRegex(config["wifiPassword"], r"^[0-9a-f]{32}$")
         self.assertEqual(self.config.stat().st_mode & 0o777, 0o600)
@@ -334,27 +344,137 @@ class ConfigurationRecovery(unittest.TestCase):
         self.path = Path(self.tmp.name)
         self.config = self.path / "LIVI/config.json"
         self.backup = self.path / "last-good.json"
+        self.factory = self.path / "factory-config.json"
         self.config.parent.mkdir()
         self.backup.write_text('{"volume":42}\n')
+        self.factory.write_text(json.dumps(DISPLAY_DEFAULTS))
         # Ownership changes require root on the target. Record the requested
         # owner here while exercising the real validation/copy/rename logic.
         chown = self.path / "chown"
         chown.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$OWNERSHIP_LOG"\n')
         chown.chmod(0o755)
+        sync = self.path / "sync"
+        sync.write_text("#!/bin/sh\nexit 0\n")
+        sync.chmod(0o755)
         self.script = self.path / "guard"
         self.script.write_text(
             (SCRIPTS / "livi-config-guard").read_text()
             .replace("/data/livi/config/LIVI/config.json", str(self.config))
             .replace("/data/livi/config/config.json.last-good", str(self.backup))
+            .replace("/usr/share/livi/config-default.json", str(self.factory))
         )
+        self.script.chmod(0o755)
+
+    def environment(self):
+        return {**os.environ, "PATH": f"{self.path}:{os.environ['PATH']}",
+                "OWNERSHIP_LOG": str(self.path / "owners")}
 
     def restore(self):
         subprocess.run(
-            ["sh", str(self.script), "restore"], check=True,
-            env={**os.environ, "PATH": f"{self.path}:{os.environ['PATH']}",
-                 "OWNERSHIP_LOG": str(self.path / "owners")},
-            capture_output=True,
+            ["sh", str(self.script), "restore"], check=True, env=self.environment(),
+            capture_output=True, text=True,
         )
+
+    def start_configuration(self, check=True):
+        source = (SCRIPTS / "livi-supervisor").read_text()
+        start = source.index("/usr/bin/livi-config-guard restore")
+        end = source.index('runtime="$(mktemp', start)
+        commands = source[start:end].replace("/usr/bin/livi-config-guard", "guard")
+        return subprocess.run(
+            ["bash", "-c", commands], check=check, env=self.environment(),
+            capture_output=True, text=True,
+        )
+
+    def test_factory_defaults_match_panel_and_do_not_freeze_other_settings(self):
+        path = SCRIPTS.parent / "share/livi/config-default.json"
+        self.assertEqual(json.loads(path.read_text()), DISPLAY_DEFAULTS)
+
+    def test_first_start_initializes_projection_and_cluster(self):
+        self.backup.unlink()
+        self.start_configuration()
+        self.assertEqual(json.loads(self.config.read_text()), DISPLAY_DEFAULTS)
+        self.assertEqual(self.config.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(self.config.stat().st_uid, os.getuid())
+        self.assertEqual(list(self.config.parent.glob("config.json.new.*")), [])
+        before = self.config.read_bytes()
+        self.start_configuration()
+        self.assertEqual(self.config.read_bytes(), before)
+
+    def test_existing_configuration_is_not_replaced_by_defaults(self):
+        original = '{"projectionWidth":800,"projectionHeight":480,"volume":17}\n'
+        self.config.write_text(original)
+        self.start_configuration()
+        self.assertEqual(self.config.read_text(), original)
+
+    def test_backup_is_restored_before_first_run_defaults(self):
+        self.start_configuration()
+        self.assertEqual(self.config.read_text(), self.backup.read_text())
+        self.assertEqual(self.config.stat().st_mode & 0o777, 0o600)
+
+    def test_invalid_configuration_without_backup_is_not_replaced(self):
+        self.backup.unlink()
+        self.config.write_text("broken")
+        self.start_configuration()
+        self.assertEqual(self.config.read_text(), "broken")
+
+    def test_invalid_backup_is_not_ignored_for_initialization(self):
+        self.backup.write_text("broken")
+        self.start_configuration()
+        self.assertFalse(self.config.exists())
+        self.assertEqual(self.backup.read_text(), "broken")
+
+    def test_dangling_configuration_and_backup_links_are_preserved(self):
+        self.backup.unlink()
+        self.config.symlink_to(self.path / "missing-config")
+        self.start_configuration()
+        self.assertTrue(self.config.is_symlink())
+        self.config.unlink()
+        self.backup.symlink_to(self.path / "missing-backup")
+        self.start_configuration()
+        self.assertFalse(self.config.exists())
+        self.assertTrue(self.backup.is_symlink())
+
+    def test_invalid_factory_defaults_stop_startup(self):
+        self.backup.unlink()
+        self.factory.write_text("[]")
+        result = self.start_configuration(check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("defaults", result.stderr.lower())
+        self.assertFalse(self.config.exists())
+
+    def test_failed_installation_stops_startup_and_cleans_temporary_file(self):
+        self.backup.unlink()
+        link = self.path / "ln"
+        link.write_text("#!/bin/sh\nexit 1\n")
+        link.chmod(0o755)
+        result = self.start_configuration(check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.config.exists())
+        self.assertEqual(list(self.config.parent.glob("config.json.new.*")), [])
+
+    def test_configuration_created_during_initialization_is_preserved(self):
+        self.backup.unlink()
+        link = self.path / "ln"
+        link.write_text(
+            '#!/bin/sh\n'
+            'printf \'{"volume":17}\\n\' > "$2"\n'
+            'exec /bin/ln "$@"\n'
+        )
+        link.chmod(0o755)
+        result = self.start_configuration(check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.config.read_text(), '{"volume":17}\n')
+        self.assertEqual(list(self.config.parent.glob("config.json.new.*")), [])
+        self.start_configuration()
+        self.assertEqual(self.config.read_text(), '{"volume":17}\n')
+
+    def test_failed_recovery_stops_startup(self):
+        self.config.write_text("broken")
+        chown = self.path / "chown"
+        chown.write_text("#!/bin/sh\nexit 1\n")
+        result = self.start_configuration(check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.config.read_text(), "broken")
 
     def test_missing_configuration_is_restored(self):
         self.restore()

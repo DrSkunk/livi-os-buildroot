@@ -38,8 +38,8 @@ The configuration includes:
 - Mesa V3D/VC4, DRM/KMS, Wayland, seatd and libinput for the Rust compositor
 - PipeWire, its PulseAudio compatibility server, and WirePlumber
 - Python 3 for OS recovery, readiness and CAN capture tools; immutable Rust projection helper
-- TJD CarPiHAT MCP2515 CAN support; Haltech CAN V2 receive uses 1 Mbit/s and
-  configures the controller in hardware listen-only mode
+- SPI/MCP2515 drivers and listen-only CAN tooling; the fixed 1 Mbit/s service
+  still needs adaptation for stock 8 MHz CarPiHAT hardware (see below)
 - libxkbcommon, libgudev and libva for the Rust graphics/media runtime
 - PulseAudio client tools for volume control, and SBC for PipeWire Bluetooth audio
 - RetroArch 1.22.2 with pinned NES, SNES, GB/GBC, GBA, Genesis and Master System cores
@@ -113,6 +113,11 @@ before Linux/KMS has initialized, and panel timing must be checked on the Pi.
 The artwork is compiled into psplash and requires an OS rebuild to change.
 This is included in the next image build, not the previously flashed image.
 
+The bundled GStreamer libav plugin needs libva (including its X11 library),
+libssh and the Vulkan loader even when decoding H.264 or H.265 in software.
+Both images include these runtime libraries; they do not imply VA-API or
+Vulkan hardware decoding support, and the kiosk continues to use Wayland.
+
 ## Host requirements
 
 An x86-64 Linux build host (required by the prebuilt Bootlin toolchain) with Git, GNU Make, GCC, Python 3.11+, `curl`, `readelf`, `unsquashfs`, and normal
@@ -156,7 +161,7 @@ Validate both Buildroot defconfigs and shell syntax with:
 
 ```sh
 make check
-python3 support/test-runtime.py
+make test-runtime
 ```
 
 Recovery and payload tests require Python 3.11+, Bash, `jq`, `mksquashfs` and
@@ -390,6 +395,13 @@ same transform, and keep HDMI1 disabled. Do not add a second libinput
 calibration rotation. This is a custom-app requirement, not an upstream guarantee.
 The console uses `fbcon=rotate:1` independently of the application.
 
+On a fresh data partition, LIVI's main projection and instrument-cluster
+stream default to **1280×400**. The cluster map can therefore extend behind
+the gauges rather than being confined to a centered 16:9 image. Android Auto
+may still transmit a standard 1280×720 video frame with margins. Existing
+configuration and last-known-good backups are preserved; change the projection
+and cluster dimensions in LIVI if a different display is used.
+
 Both Pi images use full KMS and the panel's EDID for detailed timings. The wiki's
 legacy `hdmi_group`, `hdmi_mode` and `hdmi_timings` settings are not used. Connect
 HDMI and USB before boot; if the native mode is missing, inspect the EDID and
@@ -404,11 +416,12 @@ four touch corners on the physical panel before installation.
 
 ### Haltech CAN V2 telemetry
 
-The Pi 4 image supports receive-only Haltech telemetry using the TJD CarPiHAT.
-See the [Haltech CAN wiring and setup guide](docs/HALTECH-CAN.md) for connector
-pinout, safe bus topology/termination, ECU broadcast setup, AppImage
-compatibility requirements, build/install instructions and physical
-verification. QEMU cannot verify MCP2515 electrical behavior or the vehicle bus.
+The Pi 4 image includes a receive-only CAN service, but its fixed 1 Mbit/s
+setting is incompatible with the stock 8 MHz CarPiHAT MCP2515 controller.
+See the [Haltech CAN wiring and setup guide](docs/HALTECH-CAN.md) for hardware
+limitations, supported ECU routes and remaining OS integration requirements.
+Do not treat the current image as a verified CarPiHAT telemetry solution.
+QEMU cannot verify MCP2515 electrical behavior or the vehicle bus.
 
 ## Disk layout and power-loss behaviour
 
@@ -683,6 +696,12 @@ writer continuously rotates LIVI output at 4 MiB, retaining one previous file
 messages are tracked separately so rotation cannot erase a failed health check.
 
 ## Diagnostics
+
+For CarPiHAT hardware compatibility, Haltech ECU configuration, required
+RPM/speed frames and listen-only commissioning, see
+[Haltech CAN telemetry](docs/HALTECH-CAN.md). The guide distinguishes the
+standard 1 Mbit/s connection from a conditional Nexus GCAN setup at 500 kbit/s;
+the image's CAN integration is not yet complete.
 
 On the target:
 
