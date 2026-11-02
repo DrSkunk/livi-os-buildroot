@@ -59,7 +59,7 @@ trap 'exit 143' TERM
 board="$(osrel BOARD)"
 installed_version="$(osrel VERSION)"
 installed_serial="$(osrel SERIAL)"
-[ -n "$board" ] && [ -n "$installed_serial" ] || die "$LIB/os-release is incomplete"
+if [ -z "$board" ] || [ -z "$installed_serial" ]; then die "$LIB/os-release is incomplete"; fi
 
 start() {
   mkdir -p "$STATE"
@@ -78,8 +78,10 @@ require_idle() {
 load_manifest() {
   key="$LIB/os-update.pem"
   [ -f "$key" ] || die "this OS image has no update key; install a full image"
-  [ -f "$1" ] && [ -f "$2" ] || die "update manifest or signature missing"
-  [ "$(size_of "$1")" -le 65536 ] && [ "$(size_of "$2")" -le 4096 ] || die "update manifest too large"
+  if [ ! -f "$1" ] || [ ! -f "$2" ]; then die "update manifest or signature missing"; fi
+  if [ "$(size_of "$1")" -gt 65536 ] || [ "$(size_of "$2")" -gt 4096 ]; then
+    die "update manifest too large"
+  fi
   cp "$1" "$work/manifest.json"
   cp "$2" "$work/manifest.sig"
   openssl dgst -sha256 -verify "$key" -signature "$work/manifest.sig" "$work/manifest.json" >/dev/null 2>&1 ||
@@ -101,7 +103,7 @@ load_manifest() {
     case "$hash" in ''|*[!0-9a-f]*) die "invalid manifest hash";; esac
     [ "${#hash}" -eq 64 ] || die "invalid manifest hash"
   done
-  [ "$m_size" -gt 0 ] && [ "$m_boot_size" -gt 0 ] || die "invalid manifest size"
+  if [ "$m_size" -le 0 ] || [ "$m_boot_size" -le 0 ]; then die "invalid manifest size"; fi
 }
 
 # Sets m_state to "current" when the manifest is the installed OS, or "new";
@@ -115,7 +117,8 @@ assess() {
   [ "$m_serial" -ge "$installed_serial" ] || [ "$allow_downgrade" = 1 ] ||
     die "refusing downgrade from $installed_version to $m_version (use --allow-downgrade)"
   for failed in "$STATE"/failed-*; do
-    [ -f "$failed" ] && [ "$(sed -n 4p "$failed")" = "$m_sha" ] || continue
+    [ -f "$failed" ] || continue
+    [ "$(sed -n 4p "$failed")" = "$m_sha" ] || continue
     [ "$retry_failed" = 1 ] || die "$m_version already failed its trial boot (use --retry-failed)"
   done
   m_state=new
