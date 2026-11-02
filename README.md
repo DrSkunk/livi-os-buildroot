@@ -30,9 +30,13 @@ core filenames from `/usr/lib/libretro`; ROMs, playlists, thumbnails, saves and
 user-installed cores remain writable under `/data/games`.
 
 RetroArch uses the `glcore` video driver and the touch-oriented **GLUI** menu,
-with bundled fonts/icons and touch-pointer navigation enabled. The legacy `gl`
-driver crashes during Wayland/EGL startup on the Pi. On the first boot after this
-update, existing settings are backed up as `retroarch.cfg.before-touch-v1` and
+with bundled fonts/icons and touch-pointer navigation enabled. It runs fullscreen
+with the `wayland` input driver so taps and swipes arrive through LIVI's
+compositor in screen coordinates; gamepads still use the `udev` joypad driver.
+RetroArch is patched so menu drag/swipe keeps working on panels whose EDID
+reports no physical size. The legacy `gl` driver crashes during Wayland/EGL
+startup on the Pi. On the first boot after this update, existing settings are
+backed up as `retroarch.cfg.before-touch-v2` and
 the graphics/menu/input/asset settings are repaired once. Other settings,
 including custom save directories, are preserved; subsequent user edits are not
 reset on boot. Configuration lives in `/data/games/retroarch/retroarch.cfg`.

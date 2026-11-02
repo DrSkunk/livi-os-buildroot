@@ -1,0 +1,44 @@
+From: LIVI OS maintainers
+Subject: [PATCH] Keep menu touch dragging working without panel size
+
+Upstream-Status: Pending
+
+Some panels, including the Waveshare 7.9" HDMI touchscreen used with LIVI,
+report a 0x0 mm size in their EDID. Wayland compositors then advertise a
+0 mm wl_output and RetroArch computes an infinite DPI. The menu drag
+threshold becomes 65535 px, so every touch swipe is treated as a tap.
+
+Treat a 0 mm Wayland output as unknown metrics, and give menu pointer
+input a standard 96 DPI fallback so drag and swipe gestures still work.
+
+--- a/gfx/common/wayland_common.c
++++ b/gfx/common/wayland_common.c
+@@ -445,6 +445,14 @@
+          break;
+       };
+ 
++   /* wl_output reports 0 mm when the panel EDID has no size; treat
++    * that as unknown instead of deriving an infinite DPI. */
++   if (!oi || !oi->physical_width || !oi->physical_height)
++   {
++      *value = 0.0f;
++      return false;
++   }
++
+    switch (type)
+    {
+       case DISPLAY_METRIC_MM_WIDTH:
+--- a/menu/menu_driver.c
++++ b/menu/menu_driver.c
+@@ -1164,6 +1164,11 @@
+          dpi            = 0.0f;
+ #endif
+ 
++      /* Touch drag/swipe detection is disabled without a DPI, so assume
++       * a standard display when the panel does not report its size. */
++      if (!(dpi > 0.0f && dpi < 10000.0f))
++         dpi            = 96.0f;
++
+       dpi_cached        = true;
+       last_video_width  = video_width;
+       last_video_height = video_height;

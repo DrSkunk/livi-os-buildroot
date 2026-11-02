@@ -35,6 +35,7 @@ class RetroArchSetup(unittest.TestCase):
     def test_new_menu_has_touch_assets_and_persistent_saves(self):
         config = self.setup_menu()
         for line in ['menu_driver = "glui"', 'menu_pointer_enable = "true"',
+                     'input_driver = "wayland"', 'video_fullscreen = "true"',
                      'assets_directory = "/usr/share/retroarch/assets"',
                      'input_menu_toggle_gamepad_combo = "4"',
                      'savefile_directory = "/data/games/saves"']:
@@ -44,14 +45,18 @@ class RetroArchSetup(unittest.TestCase):
 
     def test_existing_menu_is_backed_up_and_unrelated_settings_survive(self):
         original = (' menu_driver="ozone"\nmenu_pointer_enable = "false"\n'
+                    'input_driver = "udev"\nvideo_fullscreen = "false"\n'
                     'audio_volume = "-12"\nsavefile_directory = "/data/custom"\n')
         self.config.write_text(original)
         config = self.setup_menu()
         self.assertIn('menu_driver = "glui"', config)
         self.assertIn('menu_pointer_enable = "true"', config)
+        self.assertIn('input_driver = "wayland"', config)
+        self.assertIn('video_fullscreen = "true"', config)
+        self.assertEqual(config.count('input_driver ='), 1)
         self.assertIn('audio_volume = "-12"', config)
         self.assertIn('savefile_directory = "/data/custom"', config)
-        self.assertEqual(self.config.with_name("retroarch.cfg.before-touch-v1").read_text(),
+        self.assertEqual(self.config.with_name("retroarch.cfg.before-touch-v2").read_text(),
                          original)
 
     def test_later_user_edits_are_not_reset_on_boot(self):
