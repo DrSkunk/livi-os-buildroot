@@ -20,7 +20,7 @@ usage() {
 usage: livi-os-update status
        livi-os-update check    [--channel stable|nightly]
        livi-os-update download [--channel stable|nightly] [--allow-downgrade] [--retry-failed]
-       livi-os-update update   [--channel stable|nightly] [--allow-downgrade] [--retry-failed]
+       livi-os-update update   [--channel stable|nightly] [--progress] [--allow-downgrade] [--retry-failed]
        livi-os-update install MANIFEST.json [--allow-downgrade] [--retry-failed]
        livi-os-update usb DEVICE
        livi-os-update apply
@@ -34,9 +34,10 @@ size_of() { wc -c < "$1" | tr -d ' '; }
 
 cmd="${1:-}"
 [ $# -eq 0 ] || shift
-allow_downgrade=0 retry_failed=0 channel="" arg=""
+allow_downgrade=0 retry_failed=0 channel="" arg="" progress=0
 while [ $# -gt 0 ]; do
   case "$1" in
+    --progress) progress=1;;
     --allow-downgrade) allow_downgrade=1;;
     --retry-failed) retry_failed=1;;
     --channel) [ $# -ge 2 ] || usage; channel="$2"; shift;;
@@ -46,6 +47,14 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+[ "$progress" = 0 ] || [ "$cmd" = update ] || usage
+
+report() {
+  [ "$progress" = 1 ] || return 0
+  jq -cn --arg phase "$1" --arg message "$2" \
+    --argjson received "${3:-0}" --argjson total "${4:-0}" \
+    '{phase: $phase, message: $message, received: $received, total: $total}'
+}
 
 work="" usb_mount=""
 cleanup() {
@@ -152,7 +161,9 @@ install_rootfs() {
   [ -b "$root_device" ] || die "inactive root device not found"
   [ -b "$boot_device" ] || die "inactive boot device not found"
   say "writing $m_version to inactive boot and root slots"
+  report staging "Writing and verifying inactive root slot"
   write_image "$root_src" "$root_device" "$m_size" "$m_sha" rootfs
+  report staging "Writing and verifying inactive boot slot"
   write_image "$boot_src" "$boot_device" "$m_boot_size" "$m_boot_sha" bootfs
   livi-os-slot stage "$target" "$m_sha" || die "staging the trial boot failed"
   cp "$work/manifest.json" "$STATE/staged.json.new"
@@ -250,8 +261,12 @@ download() {
   mkdir -p "$dl"
   cp "$work/manifest.json" "$manifest"
   cp "$work/manifest.sig" "$manifest.sig"
+  total=$((m_size + m_boot_size))
+  report downloading "Downloading root image" 0 "$total"
   download_asset "$m_file" "$m_size" "$m_sha" rootfs
+  report downloading "Downloading boot image" "$m_size" "$total"
   download_asset "$m_boot_file" "$m_boot_size" "$m_boot_sha" bootfs
+  report downloading "Download verified" "$total" "$total"
   dl_manifest="$manifest"
 }
 

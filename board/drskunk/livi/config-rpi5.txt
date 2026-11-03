@@ -10,6 +10,7 @@ camera_auto_detect=1
 display_auto_detect=0
 dtparam=audio=on
 dtparam=i2c_arm=on
+# HAT CAN is appended by post-image.sh with a verified LIVI_CAN_OSCILLATOR.
 dtparam=pciex1
 dtoverlay=i2c-gpio,bus=2,i2c_gpio_sda=19,i2c_gpio_scl=26,i2c_gpio_delay_us=5
 # On-board RTC backup battery. Uncomment ONLY with the official rechargeable

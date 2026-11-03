@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 460" role="img" aria-labelledby="title desc">
+  <title id="title">Choose compact or remote mounting</title>
+  <desc id="desc">A: mount the Pi behind the screen with extra 10 or 11 millimeter M2.5 standoffs and the CarPiHAT on top. B: mount both boards away from the screen, join them with a rated 40-pin GPIO extender, and run HDMI and USB touch cables to the screen.</desc>
+  <defs>
+    <style>
+      text { font-family: Arial, Helvetica, sans-serif; fill: #172a3a; }
+      .heading { font-size: 25px; font-weight: 700; }
+      .label { font-size: 18px; font-weight: 700; }
+      .small { font-size: 16px; }
+    </style>
+  </defs>
+  <rect width="1100" height="460" rx="18" fill="#f3f6fa"/>
+  <rect x="20" y="20" width="510" height="420" rx="14" fill="white"/>
+  <rect x="550" y="20" width="530" height="420" rx="14" fill="white"/>
+  <text x="45" y="65" class="heading">A · COMPACT</text>
+  <text x="45" y="97" class="small">Everything behind the screen</text>
+  <rect x="55" y="155" width="205" height="55" rx="7" fill="#fff1ce" stroke="#aa7d22" stroke-width="2"/>
+  <text x="157" y="189" text-anchor="middle" class="label">CarPiHAT PRO 5</text>
+  <path d="M140 210V245M175 210V245" stroke="#536779" stroke-width="5"/>
+  <rect x="55" y="245" width="205" height="55" rx="7" fill="#d5ecd9" stroke="#286044" stroke-width="2"/>
+  <text x="157" y="279" text-anchor="middle" class="label">Pi 5</text>
+  <path d="M80 300V350M235 300V350" stroke="#aa7d22" stroke-width="8"/>
+  <rect x="55" y="350" width="205" height="55" rx="7" fill="#b9e2f6" stroke="#176da6" stroke-width="2"/>
+  <text x="157" y="384" text-anchor="middle" class="label">Screen rear</text>
+  <text x="280" y="230" class="small">Direct GPIO header</text>
+  <text x="280" y="318" class="label">M2.5 standoffs</text>
+  <text x="280" y="342" class="label">10 or 11 mm</text>
+  <text x="280" y="380" class="small">Included HDMI/USB</text>
+  <text x="280" y="403" class="small">connectors</text>
+  <text x="575" y="65" class="heading">B · REMOTE</text>
+  <text x="575" y="97" class="small">Both boards away from the screen</text>
+  <rect x="585" y="130" width="455" height="55" rx="7" fill="#b9e2f6" stroke="#176da6" stroke-width="2"/>
+  <text x="812" y="164" text-anchor="middle" class="label">Screen: HDMI + micro-USB TOUCH</text>
+  <path d="M640 185V280M670 185V280" stroke="#176da6" stroke-width="4"/>
+  <text x="690" y="220" class="small">micro-HDMI → HDMI</text>
+  <text x="690" y="248" class="small">USB-A → micro-USB data</text>
+  <rect x="585" y="280" width="140" height="60" rx="7" fill="#d5ecd9" stroke="#286044" stroke-width="2"/>
+  <text x="655" y="317" text-anchor="middle" class="label">Pi 5</text>
+  <rect x="865" y="280" width="175" height="60" rx="7" fill="#fff1ce" stroke="#aa7d22" stroke-width="2"/>
+  <text x="952" y="317" text-anchor="middle" class="label">CarPiHAT PRO 5</text>
+  <path d="M725 302H865M725 316H865" stroke="#536779" stroke-width="4"/>
+  <circle cx="735" cy="302" r="6" fill="#b13b32"/>
+  <circle cx="855" cy="302" r="6" fill="#b13b32"/>
+  <text x="812" y="375" text-anchor="middle" class="label">40-pin GPIO extender</text>
+  <text x="812" y="405" text-anchor="middle" class="small">Match pin 1 · verify power rating</text>
+</svg>

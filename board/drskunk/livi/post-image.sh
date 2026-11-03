@@ -2,6 +2,14 @@
 set -euo pipefail
 
 BOARD="${2:-${1:-rpi5}}"
+case "${LIVI_CARPIHAT-1}" in
+  1|0|'') ;;
+  *) echo "LIVI_CARPIHAT must be 1, 0 or empty" >&2; exit 1 ;;
+esac
+case "${LIVI_CAN_OSCILLATOR-}" in
+  ''|8000000|16000000|20000000) ;;
+  *) echo "LIVI_CAN_OSCILLATOR must be empty, 8000000, 16000000 or 20000000 (the actual crystal frequency)" >&2; exit 1 ;;
+esac
 BOARD_DIR="${BR2_EXTERNAL_LIVI_OS_PATH}/board/drskunk/livi"
 GENIMAGE_CFG="${BINARIES_DIR}/genimage-livi.cfg"
 GENIMAGE_TMP="${BUILD_DIR}/genimage-livi.tmp"
@@ -22,6 +30,20 @@ truncate -s 2G "${BINARIES_DIR}/livi-data.ext4"
   -E lazy_itable_init=0,lazy_journal_init=0 -d "$DATA_SEED" "${BINARIES_DIR}/livi-data.ext4"
 
 cp "$BOARD_DIR/config-$BOARD.txt" "${BINARIES_DIR}/rpi-firmware/config.txt"
+if [ -n "${LIVI_CAN_OSCILLATOR-}" ]; then
+  cat >> "${BINARIES_DIR}/rpi-firmware/config.txt" <<EOF
+
+[all]
+# Only CS0 is used; leave BCM7 free for the CarPiHAT reverse input.
+dtparam=spi=on
+dtoverlay=spi0-1cs
+dtoverlay=mcp2515-can0,oscillator=${LIVI_CAN_OSCILLATOR},interrupt=23
+EOF
+fi
+if [ "${LIVI_CARPIHAT-1}" = 1 ]; then
+  printf '\n[all]\n' >> "${BINARIES_DIR}/rpi-firmware/config.txt"
+  cat "$BOARD_DIR/carpihat.txt" >> "${BINARIES_DIR}/rpi-firmware/config.txt"
+fi
 cp "$BOARD_DIR/cmdline-$BOARD.txt" "${BINARIES_DIR}/rpi-firmware/cmdline.txt"
 rm -f "${BINARIES_DIR}/rpi-firmware/cmdline-root-a.txt" \
   "${BINARIES_DIR}/rpi-firmware/cmdline-root-b.txt"

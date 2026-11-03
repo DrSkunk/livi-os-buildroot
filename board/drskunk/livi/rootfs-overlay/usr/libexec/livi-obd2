@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+fail() { echo "livi-obd2: $*" >&2; exit 2; }
+[ "$(/usr/bin/id -u)" = 0 ] || fail "must run as root"
+[ "$#" = 1 ] || fail "requires one verified bitrate: 500000 or 1000000"
+case "$1" in
+  500000|1000000) ;;
+  *) fail "bitrate must be 500000 or 1000000" ;;
+esac
+exec /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin \
+  /usr/bin/python3 -I -B -u /usr/libexec/livi-obd2.py "$1"

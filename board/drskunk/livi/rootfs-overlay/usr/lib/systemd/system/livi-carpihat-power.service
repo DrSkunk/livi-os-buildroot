@@ -1,0 +1,26 @@
+[Unit]
+Description=CarPiHAT ignition sensing and orderly poweroff
+DefaultDependencies=no
+RequiresMountsFor=/run
+After=systemd-udev-trigger.service
+Before=sysinit.target shutdown.target
+Conflicts=shutdown.target
+StartLimitIntervalSec=30
+StartLimitBurst=3
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/livi-carpihat-power
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=sysinit.target

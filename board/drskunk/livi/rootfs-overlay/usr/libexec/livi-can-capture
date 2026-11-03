@@ -5,5 +5,8 @@ fail() { echo "livi-can-capture: $*" >&2; exit 2; }
 [ "$(/usr/bin/id -u)" = 0 ] || fail "must run as root"
 [ "$#" = 0 ] || fail "does not accept arguments"
 [ -e /sys/class/net/can0 ] || fail "CAN interface can0 is unavailable"
+exec 9>/run/lock/livi-can.lock
+/usr/bin/flock -n 9 || fail "can0 is owned by another telemetry backend"
+/usr/bin/systemctl start livi-can.service || fail "cannot configure can0; inspect journalctl -u livi-can.service"
 
 exec /usr/bin/python3 -I -B -u /usr/libexec/livi-can-capture.py

@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+fail() { echo "livi-power-helper: $*" >&2; exit 2; }
+[ "$(/usr/bin/id -u)" = 0 ] || fail "must run as root"
+[ "$#" = 1 ] || fail "expected poweroff or reboot"
+case "$1" in
+  poweroff|reboot) ;;
+  *) fail "unsupported power action";;
+esac
+# Do not queue a reset while an OTA operation is writing inactive slots.
+exec 9>/run/livi-os-update.lock
+/usr/bin/flock -n 9 || fail "an OS update operation is running"
+cd /
+exec /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root \
+  /usr/bin/systemctl --no-block "$1"

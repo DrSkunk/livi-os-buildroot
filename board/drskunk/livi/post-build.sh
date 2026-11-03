@@ -2,6 +2,10 @@
 set -eu
 
 TARGET="${1:?target directory missing}"
+case "${LIVI_CARPIHAT-1}" in
+  1|0|'') ;;
+  *) echo "LIVI_CARPIHAT must be 1, 0 or empty" >&2; exit 1 ;;
+esac
 
 (
   cd "$TARGET"
@@ -42,16 +46,29 @@ done
 # Fail image creation if Kconfig silently dropped a runtime dependency.
 for executable in bin/bash usr/bin/stat usr/bin/dbus-run-session usr/bin/pipewire \
   usr/bin/psplash usr/bin/psplash-write usr/bin/timeout \
-  usr/libexec/livi-splash-start usr/libexec/livi-splash-stop \
+  usr/libexec/livi-splash-start usr/libexec/livi-splash-stop usr/libexec/livi-os-update-helper \
+  usr/libexec/livi-power-helper usr/bin/flock usr/bin/systemctl usr/bin/sudo \
   usr/bin/pipewire-pulse usr/bin/wireplumber usr/bin/jq usr/bin/unsquashfs \
   usr/bin/pactl usr/bin/xdg-user-dir usr/libexec/livi-helperd usr/bin/pkill usr/bin/pgrep \
-  usr/bin/python3 usr/libexec/livi-can-capture usr/libexec/livi-ssh-hostkey \
+  usr/bin/python3 usr/libexec/livi-carpihat-power usr/libexec/livi-can-capture usr/libexec/livi-ssh-hostkey \
+  usr/libexec/livi-obd2 \
   usr/local/lib/livi/livi-touch-filter usr/bin/retroarch; do
   [ -x "$TARGET/$executable" ] || {
     echo "Required runtime executable missing: /$executable" >&2
     exit 1
   }
 done
+
+if [ "${LIVI_CARPIHAT-1}" = 1 ]; then
+  found_gpiod=0
+  for module in "$TARGET"/usr/lib/python*/site-packages/gpiod*.so; do
+    [ ! -f "$module" ] || found_gpiod=1
+  done
+  [ "$found_gpiod" = 1 ] || {
+    echo "CarPiHAT ignition control requires the libgpiod 1.x Python binding" >&2
+    exit 1
+  }
+fi
 
 ap_unit="$TARGET/etc/systemd/system/livi-wifi-ap.service"
 for setting in \
@@ -104,6 +121,7 @@ done
 chmod 0755 "$TARGET"/usr/bin/livi-* 2>/dev/null || true
 chmod 0755 "$TARGET"/usr/libexec/livi-*
 chmod 0644 "$TARGET/usr/libexec/livi-can-capture.py"
+chmod 0644 "$TARGET/usr/libexec/livi-obd2.py"
 chmod 0440 "$TARGET/etc/sudoers.d/99-livi"
 mkdir -p "$TARGET/data" "$TARGET/home/livi" "$TARGET/var/lib"
 mkdir -p "$TARGET/var/lib/bluetooth" "$TARGET/var/lib/systemd/timesync" "$TARGET/etc/bluetooth" \
@@ -117,11 +135,18 @@ rm -f "$TARGET/etc/machine-id" "$TARGET/var/lib/dbus/machine-id"
 : > "$TARGET/etc/machine-id"
 
 mkdir -p "$TARGET/etc/systemd/system/multi-user.target.wants"
-for unit in seatd.service minidsp.service livi-data-grow.service livi-data-setup.service livi-os-slot.service livi-os-apply.service livi-pipewire.service livi-pipewire-pulse.service livi-wireplumber.service livi-can.service livi.service livi-qemu-check.service; do
+for unit in seatd.service minidsp.service livi-data-grow.service livi-data-setup.service livi-os-slot.service livi-os-apply.service livi-pipewire.service livi-pipewire-pulse.service livi-wireplumber.service livi.service livi-qemu-check.service; do
   ln -snf "/usr/lib/systemd/system/$unit" "$TARGET/etc/systemd/system/multi-user.target.wants/$unit"
 done
+rm -f "$TARGET/etc/systemd/system/multi-user.target.wants/livi-can.service"
 
 mkdir -p "$TARGET/etc/systemd/system/sysinit.target.wants"
+if [ "${LIVI_CARPIHAT-1}" = 1 ]; then
+  ln -snf /usr/lib/systemd/system/livi-carpihat-power.service \
+    "$TARGET/etc/systemd/system/sysinit.target.wants/livi-carpihat-power.service"
+else
+  rm -f "$TARGET/etc/systemd/system/sysinit.target.wants/livi-carpihat-power.service"
+fi
 ln -snf /usr/lib/systemd/system/livi-splash.service \
   "$TARGET/etc/systemd/system/sysinit.target.wants/livi-splash.service"
 for unit in psplash-start.service psplash-systemd.service; do

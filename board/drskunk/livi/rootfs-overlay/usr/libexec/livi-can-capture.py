@@ -1,18 +1,46 @@
 #!/usr/bin/env python3
 
+import json
 import socket
 import struct
+import subprocess
+import sys
 
 CAN_EFF_FLAG = 0x80000000
 CAN_RTR_FLAG = 0x40000000
 CAN_ERR_FLAG = 0x20000000
 CAN_SFF_MASK = 0x7FF
-CAN_IDS = (0x360, 0x370)
+CAN_IDS = (0x360, 0x361, 0x368, 0x36A, 0x370, 0x372, 0x3E0)
+
+
+def check_interface():
+    result = subprocess.run(
+        ["/usr/sbin/ip", "-details", "-json", "link", "show", "dev", "can0"],
+        check=True, capture_output=True, text=True,
+    )
+    links = json.loads(result.stdout)
+    if len(links) != 1:
+        raise RuntimeError("expected exactly one can0 interface")
+    link = links[0]
+    info = link.get("linkinfo", {})
+    data = info.get("info_data", {})
+    if (
+        "UP" not in link.get("flags", [])
+        or info.get("info_kind") != "can"
+        or data.get("bittiming", {}).get("bitrate") != 1000000
+        or "LISTEN-ONLY" not in data.get("ctrlmode", [])
+        or data.get("state") in ("BUS-OFF", "STOPPED", "SLEEPING")
+    ):
+        raise RuntimeError("can0 must be UP at 1000000 bit/s, listen-only, and not bus-off")
 
 
 def main():
+    check_interface()
     can_socket = socket.socket(socket.PF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
-    filters = b"".join(struct.pack("=II", can_id, CAN_SFF_MASK) for can_id in CAN_IDS)
+    filters = b"".join(
+        struct.pack("=II", can_id, CAN_SFF_MASK | CAN_EFF_FLAG | CAN_RTR_FLAG | CAN_ERR_FLAG)
+        for can_id in CAN_IDS
+    )
     can_socket.setsockopt(socket.SOL_CAN_RAW, socket.CAN_RAW_FILTER, filters)
     can_socket.bind(("can0",))
 
@@ -32,4 +60,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
+        print(f"livi-can-capture: {error}", file=sys.stderr)
+        if isinstance(error, subprocess.CalledProcessError) and error.stderr:
+            print(error.stderr, file=sys.stderr, end="")
+        sys.exit(1)

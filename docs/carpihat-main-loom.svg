@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 490" role="img" aria-labelledby="title desc">
+  <title id="title">CarPiHAT main-loom power and optional sense inputs</title>
+  <desc id="desc">Connector positions as shown in the supplier drawing: upper row 1 ground, 2 illumination, 3 constant 12 volts; lower row 4 ground, 5 switched ignition 12 volts, 6 reverse. Illumination and reverse are optional. Match the supplier's board view, not the mirrored wire-entry view.</desc>
+  <defs>
+    <style>
+      text { font-family: Arial, Helvetica, sans-serif; fill: #172a3a; }
+      .heading { font-size: 25px; font-weight: 700; }
+      .label { font-size: 19px; font-weight: 700; }
+      .small { font-size: 16px; }
+      .pin { font-size: 28px; font-weight: 700; text-anchor: middle; }
+    </style>
+  </defs>
+  <rect width="1100" height="490" rx="18" fill="#f3f6fa"/>
+  <text x="30" y="45" class="heading">MAIN LOOM · Follow the supplier's board-view orientation</text>
+  <text x="30" y="78" class="small">Colored boxes identify pin numbers, NOT wire colors.</text>
+  <rect x="380" y="130" width="340" height="210" rx="16" fill="#20354b"/>
+  <rect x="405" y="155" width="85" height="65" fill="#b9eeb8"/>
+  <rect x="507" y="155" width="85" height="65" fill="#ffb5bd"/>
+  <rect x="609" y="155" width="85" height="65" fill="#92bbff"/>
+  <rect x="405" y="243" width="85" height="65" fill="#ffed9b"/>
+  <rect x="507" y="243" width="85" height="65" fill="#efb2f3"/>
+  <rect x="609" y="243" width="85" height="65" fill="#a5efef"/>
+  <text x="447" y="198" class="pin">1</text>
+  <text x="549" y="198" class="pin">2</text>
+  <text x="651" y="198" class="pin">3</text>
+  <text x="447" y="287" class="pin">4</text>
+  <text x="549" y="287" class="pin">5</text>
+  <text x="651" y="287" class="pin">6</text>
+  <path d="M380 185H300M380 277H300" stroke="#536779" stroke-width="3" fill="none"/>
+  <text x="35" y="178" class="label">1 / 4 · GROUND</text>
+  <text x="35" y="208" class="small">Verified vehicle ground</text>
+  <path d="M549 155V110H930V135" stroke="#a16b20" stroke-width="3" fill="none" stroke-dasharray="7 5"/>
+  <text x="760" y="160" class="label">2 · ILUM · OPTIONAL</text>
+  <text x="760" y="188" class="small">Suitable lights-on +12V signal</text>
+  <path d="M694 205H740V232" stroke="#b13b32" stroke-width="3" fill="none"/>
+  <text x="760" y="246" class="label">3 · CONSTANT +12V</text>
+  <text x="760" y="274" class="small">Permanent, fused supply</text>
+  <path d="M549 308V365H300V380" stroke="#7952a6" stroke-width="3" fill="none"/>
+  <text x="35" y="407" class="label">5 · SWITCHED +12V</text>
+  <text x="35" y="435" class="small">Verified ACC / ignition signal</text>
+  <path d="M651 308V365H930V380" stroke="#176da6" stroke-width="3" fill="none" stroke-dasharray="7 5"/>
+  <text x="760" y="407" class="label">6 · REVERSE · OPTIONAL</text>
+  <text x="760" y="435" class="small">Suitable reverse-active +12V</text>
+  <text x="380" y="475" class="small">Never connect vehicle 12V directly to Pi GPIO.</text>
+</svg>

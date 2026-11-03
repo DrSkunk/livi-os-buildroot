@@ -1,0 +1,3 @@
+# Assert the latch before Linux starts; the kernel holds it until poweroff.
+gpio=25=op,dh
+dtoverlay=gpio-poweroff,gpiopin=25,active_low

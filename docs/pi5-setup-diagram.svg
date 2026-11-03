@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 540" role="img" aria-labelledby="title desc">
+  <title id="title">USB-C bench variant: one card, two screen cables, power last</title>
+  <desc id="desc">For an image built with LIVI_CARPIHAT=0: insert microSD, connect micro-HDMI HDMI0 to screen HDMI, USB-A to micro-USB TOUCH, then USB-C bench power. Leave the CarPiHAT disconnected. Standard images use CarPiHAT power and ignition instead.</desc>
+  <defs>
+    <style>
+      text { font-family: Arial, Helvetica, sans-serif; fill: #172a3a; }
+      .heading { font-size: 25px; font-weight: 700; }
+      .label { font-size: 19px; font-weight: 700; }
+      .small { font-size: 16px; }
+      .number { font-size: 23px; font-weight: 700; fill: white; text-anchor: middle; }
+    </style>
+  </defs>
+  <rect width="1100" height="540" rx="18" fill="#f3f6fa"/>
+  <text x="32" y="46" class="heading">USB-C BENCH ONLY · image built with LIVI_CARPIHAT=0</text>
+  <rect x="45" y="115" width="370" height="175" rx="12" fill="#20354b"/>
+  <rect x="60" y="130" width="340" height="145" rx="5" fill="#b9e2f6"/>
+  <text x="230" y="190" text-anchor="middle" class="label">Waveshare 7.9-inch</text>
+  <text x="230" y="221" text-anchor="middle" class="small">HDMI video + USB touch</text>
+  <rect x="725" y="135" width="300" height="235" rx="15" fill="#d5ecd9" stroke="#286044" stroke-width="3"/>
+  <text x="875" y="179" text-anchor="middle" class="heading">Pi 5</text>
+  <rect x="716" y="202" width="65" height="35" rx="5" fill="white" stroke="#286044"/>
+  <text x="796" y="225" class="small">HDMI0</text>
+  <rect x="716" y="270" width="65" height="35" rx="5" fill="white" stroke="#286044"/>
+  <text x="796" y="294" class="small">USB-A</text>
+  <path d="M415 220H715" stroke="#176da6" stroke-width="7"/>
+  <circle cx="465" cy="220" r="20" fill="#176da6"/>
+  <text x="465" y="228" class="number">2</text>
+  <text x="510" y="205" class="label">HDMI → HDMI0</text>
+  <path d="M230 290V328H675V288H715" fill="none" stroke="#7952a6" stroke-width="7"/>
+  <circle cx="465" cy="328" r="20" fill="#7952a6"/>
+  <text x="465" y="336" class="number">3</text>
+  <text x="310" y="373" class="label">micro-USB TOUCH → USB-A</text>
+  <rect x="890" y="90" width="80" height="48" rx="5" fill="#fff1ce" stroke="#aa7d22" stroke-width="2"/>
+  <text x="930" y="119" text-anchor="middle" class="small">microSD</text>
+  <circle cx="850" cy="112" r="20" fill="#aa7d22"/>
+  <text x="850" y="120" class="number">1</text>
+  <rect x="745" y="435" width="260" height="62" rx="10" fill="#fff1ce" stroke="#aa7d22" stroke-width="2"/>
+  <text x="875" y="472" text-anchor="middle" class="label">Pi 5 bench supply</text>
+  <path d="M875 435V371" stroke="#aa7d22" stroke-width="7"/>
+  <circle cx="875" cy="404" r="20" fill="#aa7d22"/>
+  <text x="875" y="412" class="number">4</text>
+  <text x="915" y="411" class="small">USB-C LAST</text>
+  <text x="45" y="450" class="label">HDMI0 = nearest USB-C power</text>
+  <text x="45" y="480" class="small">Touch needs a USB data cable.</text>
+  <text x="45" y="510" class="small">Connection map, not a physical port-position drawing.</text>
+</svg>

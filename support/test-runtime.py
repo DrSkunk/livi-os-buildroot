@@ -3,6 +3,7 @@
 
 import os
 import runpy
+import shutil
 import hashlib
 import json
 import configparser
@@ -14,6 +15,7 @@ import sys
 import subprocess
 import tempfile
 import time
+import threading
 import unittest
 
 
@@ -182,6 +184,111 @@ class ProjectionPrivilegeBoundary(unittest.TestCase):
         result = subprocess.run(
             ["/usr/sbin/visudo", "-cf", str(self.RULES)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+
+class PowerPrivilegeBoundary(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        path = Path(self.tmp.name)
+        self.systemctl = path / "systemctl"
+        self.systemctl.write_text(
+            '#!/bin/sh\nprintf "%s\\n" "$@"\n'
+            'printf "env:%s:%s\\n" "${BASH_ENV-unset}" "${LIVI_OS_UPDATE_REPO-unset}"\n'
+        )
+        self.systemctl.chmod(0o755)
+        self.flock = path / "flock"
+        self.flock.write_text('#!/bin/sh\n[ "$1" = -n ] && [ "$2" = 9 ]\n')
+        self.flock.chmod(0o755)
+        source = (SCRIPTS.parent / "libexec/livi-power-helper").read_text()
+        self.script = path / "launcher"
+        self.script.write_text(
+            source.replace('$(/usr/bin/id -u)', "0")
+            .replace("/usr/bin/systemctl", str(self.systemctl))
+            .replace("/usr/bin/flock", str(self.flock))
+            .replace("/run/livi-os-update.lock", str(path / "lock"))
+        )
+
+    def launch(self, *args):
+        return subprocess.run(
+            ["sh", str(self.script), *args], capture_output=True, text=True,
+            env={**os.environ, "BASH_ENV": "/untrusted",
+                 "LIVI_OS_UPDATE_REPO": "attacker/repo"},
+        )
+
+    def test_only_exact_poweroff_and_reboot_reach_systemctl_with_clean_environment(self):
+        for action in ("poweroff", "reboot"):
+            result = self.launch(action)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.splitlines(), ["--no-block", action, "env:unset:unset"])
+
+    def test_rejects_extra_arguments_services_and_shell_commands(self):
+        for args in [(), ("halt",), ("reboot", "--force"), ("start", "sshd"),
+                     ("poweroff;id",), ("sh", "-c", "id")]:
+            with self.subTest(args=args):
+                self.assertNotEqual(self.launch(*args).returncode, 0)
+
+    def test_systemctl_failure_reaches_caller(self):
+        self.systemctl.write_text('#!/bin/sh\necho "systemd refused" >&2\nexit 1\n')
+        result = self.launch("poweroff")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("systemd refused", result.stderr)
+
+    def test_an_active_os_update_prevents_host_power_changes(self):
+        self.flock.write_text('#!/bin/sh\nexit 1\n')
+        result = self.launch("reboot")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("OS update operation is running", result.stderr)
+        self.assertEqual(result.stdout, "")
+
+
+class OsUpdatePrivilegeBoundary(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        path = Path(self.tmp.name)
+        updater = path / "updater"
+        updater.write_text(
+            '#!/bin/sh\nprintf "%s\\n" "$@"\n'
+            'printf "repo:%s\\nenv:%s\\n" "${LIVI_OS_UPDATE_REPO-unset}" "${BASH_ENV-unset}"\n'
+        )
+        updater.chmod(0o755)
+        source = (SCRIPTS.parent / "libexec/livi-os-update-helper").read_text()
+        source = (source.replace('$(/usr/bin/id -u)', "0")
+                  .replace("/usr/bin/livi-os-update", str(updater)))
+        self.script = path / "launcher"
+        self.script.write_text(source)
+
+    def launch(self, *args):
+        return subprocess.run(
+            ["sh", str(self.script), *args], capture_output=True, text=True,
+            env={**os.environ, "LIVI_OS_UPDATE_REPO": "attacker/repo",
+                 "BASH_ENV": "/untrusted"},
+        )
+
+    def test_only_fixed_operations_and_channels_reach_updater(self):
+        for args, expected in [
+            (("status",), ["status"]),
+            (("check", "stable"), ["check", "--channel", "stable"]),
+            (("check", "nightly"), ["check", "--channel", "nightly"]),
+            (("stage", "nightly"), ["update", "--channel", "nightly", "--progress"]),
+            (("stage", "stable"), ["update", "--channel", "stable", "--progress"]),
+            (("apply",), ["apply"]),
+        ]:
+            with self.subTest(args=args):
+                result = self.launch(*args)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.splitlines(), expected + ["repo:unset", "env:unset"])
+
+    def test_rejects_paths_downgrades_retries_injections_and_extra_arguments(self):
+        for args in [
+            (), ("install", "/tmp/manifest"), ("check",), ("stage", "dev"),
+            ("status", "extra"), ("apply", "--retry-failed"),
+            ("stage", "stable", "--allow-downgrade"), ("stage", "stable;reboot"),
+            ("sh", "-c", "id"), ("cancel",),
+        ]:
+            with self.subTest(args=args):
+                self.assertNotEqual(self.launch(*args).returncode, 0)
 
 
 class RustPayload(unittest.TestCase):
@@ -874,6 +981,336 @@ dbus-run-session() {
             )
 
 
+class Obd2(unittest.TestCase):
+    def setUp(self):
+        self.module = runpy.run_path(str(SCRIPTS.parent / "libexec/livi-obd2.py"))
+
+    def frame(self, pid, data, can_id=0x7E8):
+        payload = bytes((len(data) + 2, 0x41, pid)) + data
+        return struct.pack("=IB3x8s", can_id, 8, payload)
+
+    def poller(self):
+        can, ecu = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+        ecu.settimeout(2)
+        read, write = os.pipe()
+        self.addCleanup(can.close)
+        self.addCleanup(ecu.close)
+        self.addCleanup(os.close, read)
+        self.addCleanup(os.close, write)
+        return self.module["Poller"](can, 500000, read), ecu, write
+
+    def test_decodes_every_approved_pid_and_preserves_zero(self):
+        cases = [
+            (0x0C, b"\x2E\xE0", 3000), (0x0D, b"\x00", 0),
+            (0x05, b"\x7F", 87), (0x0F, b"\x14", -20),
+            (0x0B, b"\x65", 101), (0x11, b"\xFF", 100),
+            (0x0E, b"\x60", -16), (0x42, b"\x37\x14", 14.1),
+            (0x1F, b"\x01\x00", 256), (0x2F, b"\x00", 0),
+            (0x5C, b"\x87", 95), (0x52, b"\xFF", 100),
+        ]
+        self.assertEqual(len(cases), len(self.module["PIDS"]))
+        for pid, data, expected in cases:
+            with self.subTest(pid=pid):
+                self.assertAlmostEqual(self.module["decode"](pid, data), expected)
+                self.assertEqual(self.module["response"](self.frame(pid, data), pid),
+                                 (0x7E8, data))
+                with self.assertRaises(ValueError):
+                    self.module["decode"](pid, data + b"\x00")
+        for pid in (0x04, 0x09, 0x14, 0xFF):
+            with self.assertRaises(ValueError):
+                self.module["decode"](pid, b"\x00")
+            with self.assertRaises(ValueError):
+                self.module["request_frame"](pid)
+
+    def test_requests_are_only_service_01_and_standard_diagnostic_addresses(self):
+        for pid in (*self.module["PIDS"], *self.module["DISCOVERY"]):
+            for ecu in (None, 0x7E8, 0x7EF):
+                can_id, dlc, payload = struct.unpack(
+                    "=IB3x8s", self.module["request_frame"](pid, ecu),
+                )
+                self.assertEqual(can_id, 0x7DF if ecu is None else ecu - 8)
+                self.assertEqual(dlc, 8)
+                self.assertEqual(payload, bytes((2, 1, pid, 0, 0, 0, 0, 0)))
+        for ecu in (0x7E0, 0x123, 0x800007E8):
+            with self.assertRaises(ValueError):
+                self.module["request_frame"](0x0C, ecu)
+
+    def test_response_rejects_wrong_pid_service_address_length_and_transport(self):
+        response = self.module["response"]
+        valid = self.frame(0x0C, b"\x2E\xE0")
+        self.assertIsNone(response(valid, 0x42))
+        self.assertIsNone(response(valid, 0x0C, 0x7E9))
+        for can_id in (0x123, 0x7E0, 0x800007E8, 0x400007E8, 0x200007E8):
+            self.assertIsNone(response(self.frame(0x0C, b"\x2E\xE0", can_id), 0x0C))
+        for dlc, payload in (
+            (9, b"\x04\x41\x0C\x2E\xE0"), (4, b"\x04\x41\x0C\x2E\xE0"),
+            (8, b"\x10\x08\x41\x0C\x2E\xE0"), (8, b"\x03\x41\x0C\x2E\xE0"),
+            (8, b"\x04\x42\x0C\x2E\xE0"), (8, b"\x03\x7F\x01\x12"),
+        ):
+            self.assertIsNone(response(struct.pack("=IB3x8s", 0x7E8, dlc, payload), 0x0C))
+        self.assertIsNone(response(valid[:-1], 0x0C))
+
+    def test_bitmap_chaining_sticks_to_one_ecu(self):
+        poller, _, _ = self.poller()
+        replies = [
+            (0x7E9, bytes.fromhex("00180001")),  # RPM, speed, next page
+            (0x7E9, bytes.fromhex("00000001")),  # next page
+            (0x7E9, bytes.fromhex("40000000")),  # voltage
+        ]
+        with mock.patch.object(poller, "query", side_effect=replies) as query:
+            self.assertTrue(poller.discover())
+        self.assertEqual([call.args[0] for call in query.call_args_list], [0, 0x20, 0x40])
+        self.assertEqual(poller.ecu, 0x7E9)
+        self.assertEqual(poller.supported & self.module["PIDS"].keys(), {0x0C, 0x0D, 0x42})
+        with mock.patch.object(poller, "query", return_value=None):
+            self.assertFalse(poller.discover())
+
+    def test_socket_exchange_rate_limit_timeout_and_lifeline(self):
+        poller, ecu, write = self.poller()
+        requests = []
+        def responder():
+            for _ in range(2):
+                frame = ecu.recv(16)
+                requests.append((time.monotonic(), frame))
+                ecu.send(self.frame(0x0C, b"\x2E\xE0"))
+        thread = threading.Thread(target=responder)
+        thread.start()
+        for _ in range(2):
+            self.assertEqual(poller.query(0x0C), (0x7E8, b"\x2E\xE0"))
+        thread.join(timeout=2)
+        self.assertFalse(thread.is_alive())
+        self.assertGreaterEqual(requests[1][0] - requests[0][0], 0.095)
+        self.assertEqual(poller.requests, 2)
+        self.assertIsNone(poller.query(0x05))
+        self.assertEqual(poller.timeouts, 1)
+        os.write(write, b"not a command")
+        with self.assertRaisesRegex(RuntimeError, "EOF only"):
+            poller.wait(0)
+        with mock.patch("os.read", return_value=b""), \
+                mock.patch("select.select", return_value=([poller.lifeline], [], [])), \
+                self.assertRaises(self.module["Stopped"]):
+            poller.query(0x0C)
+        self.assertEqual(poller.requests, 3, "no transmission after lifeline EOF")
+
+    def test_stale_values_clear_independently_and_health_distinguishes_unsupported(self):
+        poller, _, _ = self.poller()
+        poller.ecu = 0x7E8
+        poller.supported = {0x0C, 0x0D, 0x42, 0x5C}
+        poller.status = "available"
+        poller.seen = {0x0C: 10, 0x42: 11, 0x5C: 0}
+        with mock.patch("time.monotonic", return_value=12), mock.patch("builtins.print") as output:
+            self.assertEqual(poller.expire(), {"rpm": None})
+            poller.emit({"speedKph": 0})
+        message = json.loads(output.call_args.args[0])
+        self.assertEqual(message["speedKph"], 0)
+        self.assertEqual(message["obd2"]["signals"]["batteryV"]["state"], "available")
+        self.assertEqual(message["obd2"]["signals"]["rpm"]["state"], "stale")
+        self.assertEqual(message["obd2"]["signals"]["coolantC"]["state"], "unsupported")
+
+    def test_helper_has_fixed_bitrates_environment_and_no_user_requests(self):
+        helper = SCRIPTS.parent / "libexec/livi-obd2"
+        for args in ([], ["250000"], ["500000", "7DF"], ["500000;reboot"]):
+            result = subprocess.run(["sh", str(helper), *args], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+        source = helper.read_text()
+        self.assertIn("env -i", source)
+        self.assertIn('500000|1000000)', source)
+        sudoers = (SCRIPTS.parents[1] / "etc/sudoers.d/99-livi").read_text()
+        self.assertIn("/usr/libexec/livi-obd2 500000, /usr/libexec/livi-obd2 1000000", sudoers)
+        passive = (SCRIPTS.parent / "libexec/livi-can-capture").read_text()
+        self.assertIn("/usr/bin/flock -n 9", passive)
+
+    def test_normal_mode_readiness_rejects_wrong_bitrate_and_bus_off(self):
+        link = {
+            "flags": ["UP"],
+            "linkinfo": {
+                "info_kind": "can",
+                "info_data": {"bittiming": {"bitrate": 500000}, "state": "ERROR-ACTIVE"},
+            },
+        }
+        def verify():
+            with mock.patch("subprocess.run", return_value=subprocess.CompletedProcess(
+                [], 0, stdout=json.dumps([link]),
+            )):
+                self.module["check_interface"](500000)
+        verify()
+        data = link["linkinfo"]["info_data"]
+        for field, value in (("ctrlmode", ["LISTEN-ONLY"]), ("state", "BUS-OFF"),
+                             ("bittiming", {"bitrate": 1000000})):
+            previous = data.get(field)
+            data[field] = value
+            with self.subTest(field=field), self.assertRaises(RuntimeError):
+                verify()
+            if previous is None:
+                del data[field]
+            else:
+                data[field] = previous
+
+    def test_scheduler_suppresses_repeatedly_missing_pids_without_losing_live_zero(self):
+        poller, _, _ = self.poller()
+        clock = [0.0]
+        requested = []
+        messages = []
+        def wait(seconds, receive=False):
+            clock[0] += max(0.01, seconds)
+            if clock[0] > 20:
+                raise self.module["Stopped"]()
+        def discover():
+            poller.ecu = 0x7E8
+            poller.supported = {0x0C, 0x0D}
+            return True
+        def query(pid):
+            requested.append(pid)
+            clock[0] += 0.1
+            poller.requests += 1
+            if pid == 0x0C:
+                poller.timeouts += 1
+                return None
+            poller.last_response = clock[0]
+            return 0x7E8, b"\x00"
+        with mock.patch.object(poller, "wait", side_effect=wait), \
+                mock.patch.object(poller, "discover", side_effect=discover), \
+                mock.patch.object(poller, "query", side_effect=query), \
+                mock.patch.dict(poller.run.__globals__, check_interface=mock.Mock()), \
+                mock.patch("time.monotonic", side_effect=lambda: clock[0]), \
+                mock.patch("builtins.print", side_effect=lambda message, **_: messages.append(json.loads(message))), \
+                self.assertRaises(self.module["Stopped"]):
+            poller.run()
+        self.assertEqual(requested.count(0x0C), 3)
+        self.assertIn(0x0C, poller.disabled)
+        self.assertTrue(any(message.get("speedKph") == 0 for message in messages))
+        self.assertTrue(any("rpm" in message and message["rpm"] is None for message in messages))
+        self.assertEqual(poller.timeouts, 3)
+
+    def test_shutdown_brings_can_down_and_lock_conflict_never_configures_it(self):
+        fake = mock.Mock()
+        fake.run.side_effect = self.module["Stopped"]()
+        calls = []
+        with mock.patch("builtins.open", mock.mock_open()), \
+                mock.patch("fcntl.flock"), mock.patch("signal.signal"), \
+                mock.patch("sys.argv", ["livi-obd2.py", "500000"]), \
+                mock.patch.dict(self.module["main"].__globals__, {
+                    "command": lambda *args: calls.append(args),
+                    "check_interface": mock.Mock(),
+                    "Poller": mock.Mock(return_value=fake),
+                }), mock.patch("socket.socket"):
+            self.module["main"]()
+        self.assertIn((
+            "/usr/sbin/ip", "link", "set", "dev", "can0", "type", "can",
+            "bitrate", "500000", "listen-only", "off",
+        ), calls)
+        self.assertEqual(calls[-1], ("/usr/sbin/ip", "link", "set", "dev", "can0", "down"))
+        configure = mock.Mock()
+        with mock.patch("builtins.open", mock.mock_open()), \
+                mock.patch("fcntl.flock", side_effect=BlockingIOError("busy")), \
+                mock.patch("signal.signal"), \
+                mock.patch("sys.argv", ["livi-obd2.py", "500000"]), \
+                mock.patch.dict(self.module["main"].__globals__, command=configure), \
+                self.assertRaises(BlockingIOError):
+            self.module["main"]()
+        configure.assert_not_called()
+
+
+class CanCapture(unittest.TestCase):
+    def setUp(self):
+        self.module = runpy.run_path(str(SCRIPTS.parent / "libexec/livi-can-capture.py"))
+
+    def link(self):
+        return {
+            "flags": ["UP", "NOARP"],
+            "linkinfo": {
+                "info_kind": "can",
+                "info_data": {
+                    "bittiming": {"bitrate": 1000000},
+                    "ctrlmode": ["LISTEN-ONLY"],
+                    "state": "ERROR-ACTIVE",
+                },
+            },
+        }
+
+    def check_link(self, links):
+        with mock.patch("subprocess.run", return_value=subprocess.CompletedProcess(
+            [], 0, stdout=json.dumps(links),
+        )) as run:
+            self.module["check_interface"]()
+        run.assert_called_once_with(
+            ["/usr/sbin/ip", "-details", "-json", "link", "show", "dev", "can0"],
+            check=True, capture_output=True, text=True,
+        )
+
+    def test_requires_real_can_at_1mbit_listen_only(self):
+        self.check_link([self.link()])
+        for field, value in (
+            ("bittiming", {"bitrate": 500000}),
+            ("bittiming", {}),
+            ("ctrlmode", []),
+            ("state", "BUS-OFF"),
+            ("state", "STOPPED"),
+            ("state", "SLEEPING"),
+        ):
+            link = self.link()
+            link["linkinfo"]["info_data"][field] = value
+            with self.subTest(field=field, value=value), self.assertRaises(RuntimeError):
+                self.check_link([link])
+        link = self.link()
+        link["flags"] = []
+        with self.assertRaises(RuntimeError):
+            self.check_link([link])
+        link = self.link()
+        link["linkinfo"]["info_kind"] = "vcan"
+        with self.assertRaises(RuntimeError):
+            self.check_link([link])
+        for links in ([], [self.link(), self.link()]):
+            with self.assertRaises(RuntimeError):
+                self.check_link(links)
+        with mock.patch("subprocess.run", side_effect=subprocess.CalledProcessError(
+            1, "ip", stderr="interface unavailable",
+        )), self.assertRaises(subprocess.CalledProcessError):
+            self.module["check_interface"]()
+
+    def test_filters_all_seven_ids_and_emits_only_standard_data_frames(self):
+        ids = (0x360, 0x361, 0x368, 0x36A, 0x370, 0x372, 0x3E0)
+        self.assertEqual(self.module["CAN_IDS"], ids)
+        frames = [struct.pack("=IB3x8s", can_id, 4, b"\x04\xD2\x09\x29")
+                  for can_id in ids]
+        for can_id, length in (
+            (0x123, 4), (0x80000360, 4), (0x40000360, 4),
+            (0x20000360, 4), (0x360, 0), (0x360, 1), (0x360, 9),
+        ):
+            frames.append(struct.pack("=IB3x8s", can_id, length, b""))
+        frames.extend([b"short", RuntimeError("end capture")])
+        receiver = mock.Mock()
+        receiver.recv.side_effect = frames
+        ready = mock.Mock()
+        with mock.patch.dict(self.module["main"].__globals__, check_interface=ready), \
+                mock.patch("socket.socket", return_value=receiver) as constructor, \
+                mock.patch("builtins.print") as output, \
+                self.assertRaisesRegex(RuntimeError, "end capture"):
+            self.module["main"]()
+        ready.assert_called_once_with()
+        constructor.assert_called_once_with(socket.PF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
+        receiver.bind.assert_called_once_with(("can0",))
+        receiver.setsockopt.assert_called_once_with(
+            socket.SOL_CAN_RAW, socket.CAN_RAW_FILTER,
+            b"".join(struct.pack("=II", can_id, 0xE00007FF) for can_id in ids),
+        )
+        self.assertEqual(output.call_args_list, [
+            mock.call(f"can0 {can_id:03X}#04D20929", flush=True) for can_id in ids
+        ])
+
+    def test_service_and_hotplug_use_the_same_fixed_configuration(self):
+        unit = (SCRIPTS.parent / "lib/systemd/system/livi-can.service").read_text()
+        self.assertIn("type can bitrate 1000000 listen-only on", unit)
+        self.assertIn("BindsTo=sys-subsystem-net-devices-can0.device", unit)
+        self.assertNotIn("WantedBy=multi-user.target", unit)
+        rules = (SCRIPTS.parents[1] / "etc/udev/rules.d/80-livi-can.rules").read_text()
+        self.assertIn('KERNEL=="can0"', rules)
+        self.assertIn('ENV{SYSTEMD_WANTS}+="livi-can.service"', rules)
+        wrapper = (SCRIPTS.parent / "libexec/livi-can-capture").read_text()
+        self.assertIn('/usr/bin/systemctl start livi-can.service || fail', wrapper)
+        self.assertIn('[ "$#" = 0 ] || fail', wrapper)
+
+
 class PostImage(unittest.TestCase):
     def test_builds_boot_control_and_matching_slot_cmdlines(self):
         self.check_image("rpi5")
@@ -881,7 +1318,46 @@ class PostImage(unittest.TestCase):
     def test_pi4_refreshes_stale_firmware_cmdline(self):
         self.check_image("rpi4")
 
-    def check_image(self, board):
+    def test_disables_carpihat_on_both_boards(self):
+        for board in ("rpi4", "rpi5"):
+            for setting in ("0", ""):
+                with self.subTest(board=board, setting=setting):
+                    self.check_image(board, setting)
+
+    def test_carpihat_defaults_on_without_an_environment_override(self):
+        for board in ("rpi4", "rpi5"):
+            with self.subTest(board=board):
+                self.check_image(board, None)
+
+    def test_invalid_carpihat_setting_fails_both_build_hooks(self):
+        for script, args in (("post-build.sh", ["/unused", "rpi5"]),
+                             ("post-image.sh", ["rpi5"])):
+            result = subprocess.run(
+                ["bash", str(ROOT / "board/drskunk/livi" / script), *args],
+                env={**os.environ, "LIVI_CARPIHAT": "yes"},
+                capture_output=True, text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("LIVI_CARPIHAT must be", result.stderr)
+
+    def test_can_uses_verified_crystal_and_only_spi_cs0_on_both_boards(self):
+        for board in ("rpi4", "rpi5"):
+            for clock in ("8000000", "16000000", "20000000"):
+                with self.subTest(board=board, clock=clock):
+                    self.check_image(board, oscillator=clock)
+
+    def test_can_rejects_impossible_or_unverified_clock_before_image_creation(self):
+        for clock in ("16000000,interrupt=25", "0", "yes"):
+            with self.subTest(clock=clock):
+                result = subprocess.run(
+                    ["bash", str(ROOT / "board/drskunk/livi/post-image.sh"), "rpi5"],
+                    env={**os.environ, "LIVI_CARPIHAT": "1", "LIVI_CAN_OSCILLATOR": clock},
+                    capture_output=True, text=True,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("LIVI_CAN_OSCILLATOR", result.stderr)
+
+    def check_image(self, board, carpihat="1", oscillator=""):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp)
             binaries = path / "images"
@@ -913,7 +1389,12 @@ class PostImage(unittest.TestCase):
                 "BUILD_DIR": str(path / "build"),
                 "HOST_DIR": str(host),
                 "CAPTURE": str(capture),
+                "LIVI_CAN_OSCILLATOR": oscillator,
             }
+            if carpihat is None:
+                env.pop("LIVI_CARPIHAT", None)
+            else:
+                env["LIVI_CARPIHAT"] = carpihat
             script = ROOT / "board/drskunk/livi/post-image.sh"
             for _ in range(2):
                 result = subprocess.run(["bash", str(script), board], env=env,
@@ -928,6 +1409,19 @@ class PostImage(unittest.TestCase):
             self.assertIn('"rpi-firmware/cmdline-root-a.txt"', generated)
             self.assertIn('"rpi-firmware/cmdline-root-b.txt"', generated)
             config = (firmware / "config.txt").read_text()
+            self.assertEqual(config.count("dtoverlay=spi0-1cs"), int(bool(oscillator)))
+            self.assertEqual(config.count("dtoverlay=mcp2515-can0"), int(bool(oscillator)))
+            self.assertNotIn("spi-bcm2835-overlay", config)
+            if oscillator:
+                self.assertIn(
+                    f"dtoverlay=mcp2515-can0,oscillator={oscillator},interrupt=23", config,
+                )
+            enabled = carpihat in ("1", None)
+            self.assertEqual(config.count("gpio=25=op,dh"), int(enabled))
+            self.assertEqual(
+                config.count("dtoverlay=gpio-poweroff,gpiopin=25,active_low"),
+                int(enabled),
+            )
             self.assertEqual(config.count("[boot_partition=2]"), 1)
             self.assertIn("cmdline=cmdline-root-a.txt", config)
             self.assertIn("cmdline=cmdline-root-b.txt", config)
@@ -943,6 +1437,110 @@ class PostImage(unittest.TestCase):
                 expected.replace(TrialBoot.ROOT_A, TrialBoot.ROOT_B),
             )
             self.assertTrue((binaries / "autoboot.txt").exists())
+
+
+class CarPiHATPostBuild(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        path = Path(temp.name)
+        self.target = path / "target"
+        shutil.copytree(ROOT / "board/drskunk/livi/rootfs-overlay", self.target,
+                        symlinks=True)
+        for name in (
+            "bin/bash", "usr/bin/stat", "usr/bin/dbus-run-session", "usr/bin/pipewire",
+            "usr/bin/psplash", "usr/bin/psplash-write", "usr/bin/timeout",
+            "usr/bin/pipewire-pulse", "usr/bin/wireplumber", "usr/bin/jq",
+            "usr/bin/unsquashfs", "usr/bin/pactl", "usr/bin/xdg-user-dir",
+            "usr/libexec/livi-helperd", "usr/bin/python3", "usr/bin/pkill", "usr/bin/pgrep",
+            "usr/bin/flock", "usr/bin/systemctl", "usr/bin/sudo",
+            "usr/local/lib/livi/livi-touch-filter", "usr/bin/retroarch",
+        ):
+            file = self.target / name
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_text("#!/bin/sh\nexit 1\n")
+            file.chmod(0o755)
+        for name in (
+            "usr/share/X11/xkb/rules/evdev", "usr/share/X11/xkb/symbols/us",
+            "usr/share/X11/xkb/keycodes/evdev", "usr/share/X11/xkb/types/complete",
+            "usr/share/X11/xkb/compat/complete",
+            "usr/share/retroarch/assets/glui/font.ttf",
+            "usr/share/retroarch/assets/glui/back.png",
+            "usr/share/retroarch/assets/ozone/regular.ttf",
+        ):
+            file = self.target / name
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_text("fixture")
+        for name in (
+            "libEGL.so.1", "libGLESv2.so.2", "libgbm.so.1", "libdrm.so.2",
+            "libinput.so.10", "libseat.so.1", "libxkbcommon.so.0",
+            "libwayland-client.so.0", "libwayland-server.so.0", "libgudev-1.0.so.0",
+            "libva.so.2",
+        ):
+            (self.target / "usr/lib" / name).touch()
+        (self.target / "usr/lib/livi").mkdir(parents=True, exist_ok=True)
+        (self.target / "usr/lib/livi/LIVI.AppImage").write_bytes(b"fixture")
+        (self.target / "usr/lib/livi/factory-appimage.sha256").write_text(
+            hashlib.sha256(b"fixture").hexdigest() + "  usr/lib/livi/LIVI.AppImage\n")
+        (self.target / "etc/systemd/system").mkdir(parents=True, exist_ok=True)
+        (self.target / "etc/systemd/system/livi-wifi-ap.service").write_text(
+            "[Unit]\nRequires=livi-data-setup.service\nAfter=livi-data-setup.service\n"
+            "[Service]\nEnvironment=SUDO_USER=livi\n"
+            "ExecStartPre=/usr/libexec/livi-helperd --wifi-ap-claim\n"
+            "ExecStart=/usr/libexec/livi-helperd --wifi-ap\n"
+            "ExecStop=/usr/libexec/livi-helperd --wifi-ap-teardown\n"
+        )
+        self.binding = self.target / "usr/lib/python3.14/site-packages/gpiod.so"
+        self.binding.parent.mkdir(parents=True)
+        self.binding.touch()
+        host = path / "host"
+        (host / "bin").mkdir(parents=True)
+        readelf = host / "bin/aarch64-linux-readelf"
+        readelf.write_text("#!/bin/sh\nexit 0\n")
+        readelf.chmod(0o755)
+        self.env = {
+            **os.environ,
+            "HOST_DIR": str(host),
+            "BR2_EXTERNAL_LIVI_OS_PATH": str(ROOT),
+            "LIVI_OS_VERSION": "test",
+            "LIVI_OS_SERIAL": "1",
+        }
+
+    def build(self, board, setting):
+        env = self.env.copy()
+        env.pop("LIVI_CARPIHAT", None)
+        if setting is not None:
+            env["LIVI_CARPIHAT"] = setting
+        return subprocess.run(
+            ["sh", str(ROOT / "board/drskunk/livi/post-build.sh"), str(self.target), board],
+            env=env, capture_output=True, text=True,
+        )
+
+    def test_enable_disable_and_reenable_without_stale_service_links(self):
+        link = self.target / "etc/systemd/system/sysinit.target.wants/livi-carpihat-power.service"
+        can_link = self.target / "etc/systemd/system/multi-user.target.wants/livi-can.service"
+        can_link.parent.mkdir(parents=True, exist_ok=True)
+        for board in ("rpi4", "rpi5"):
+            for setting in ("1", "0", "1", "", None):
+                with self.subTest(board=board, setting=setting):
+                    can_link.symlink_to("/usr/lib/systemd/system/livi-can.service")
+                    result = self.build(board, setting)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertFalse(can_link.is_symlink())
+                    self.assertEqual(link.is_symlink(), setting in ("1", None))
+                    if link.is_symlink():
+                        self.assertEqual(
+                            str(link.readlink()),
+                            "/usr/lib/systemd/system/livi-carpihat-power.service",
+                        )
+
+    def test_missing_binding_fails_enabled_build_but_not_disabled_build(self):
+        self.binding.unlink()
+        result = self.build("rpi5", "1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("requires the libgpiod 1.x Python binding", result.stderr)
+        result = self.build("rpi5", "0")
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 class TrialBoot(unittest.TestCase):
@@ -1253,11 +1851,22 @@ class OsUpdate(unittest.TestCase):
                   for n in ("livi-os-rpi5-update.json", "livi-os-rpi5-update.json.sig",
                             "livi-os-rpi5-rootfs.squashfs", "livi-os-rpi5-boot.vfat")]
         (fixtures / "latest").write_text(json.dumps({"assets": assets}))
+        (fixtures / "nightly").write_text(json.dumps({"assets": assets}))
         check = json.loads(self.run_update("check").stdout)
         self.assertEqual(check, {"channel": "stable", "installed": "v1.0.0",
                                  "available": "v1.1.0", "update": True})
-        self.run_update("update")
+        nightly = json.loads(self.run_update("check", "--channel", "nightly").stdout)
+        self.assertEqual(nightly, {**check, "channel": "nightly"})
+        result = self.run_update("update", "--channel", "nightly", "--progress")
+        progress = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual([p["phase"] for p in progress],
+                         ["downloading", "downloading", "downloading", "staging", "staging"])
+        self.assertEqual(progress[0]["received"], 0)
+        self.assertEqual(progress[1]["received"], len(image))
+        self.assertEqual(progress[2]["received"], len(image) + len(boot_image))
+        self.assertEqual(progress[2]["received"], progress[2]["total"])
         self.assert_installed(image, boot_image)
+        self.assertNotIn("reboot", self.slot_log())
         self.assertFalse((self.state / "download").exists())
 
     def test_usb_stick_update_is_staged_and_tried_immediately(self):
@@ -1295,6 +1904,168 @@ class OsUpdate(unittest.TestCase):
                                  capture_output=True, text=True)
         self.assertNotEqual(refused.returncode, 0)
         self.assertIn("does not match", refused.stderr)
+
+
+class CarPiHATPower(unittest.TestCase):
+    def setUp(self):
+        self.module = runpy.run_path(str(SCRIPTS.parent / "libexec/livi-carpihat-power"))
+        self.monitor = self.module["monitor"]
+        self.clock = 0.0
+        self.stopped = mock.Mock()
+        self.stopped.is_set.return_value = False
+
+    def run_monitor(self, readings):
+        values = iter(readings)
+
+        def read():
+            return next(values)
+
+        with mock.patch.object(self.module["time"], "monotonic",
+                               side_effect=lambda: self.clock):
+            with mock.patch.object(self.module["subprocess"], "run") as shutdown:
+                self.monitor(read, self.stopped)
+                return shutdown
+
+    def test_exact_ten_second_threshold_including_ignition_off_at_boot(self):
+        def wait(_interval):
+            self.clock = {0.0: 9.999, 9.999: 10.0}[self.clock]
+
+        self.stopped.wait.side_effect = wait
+        shutdown = self.run_monitor([0, 0, 0])
+        self.assertEqual(self.clock, 10.0)
+        shutdown.assert_called_once_with(
+            ["/usr/bin/systemctl", "--no-block", "poweroff"], check=True, timeout=10,
+        )
+        self.assertEqual(self.stopped.wait.call_count, 2)
+
+    def test_ignition_return_resets_the_full_countdown(self):
+        times = iter([9.0, 9.1, 19.0, 19.1])
+        self.stopped.wait.side_effect = lambda _interval: setattr(self, "clock", next(times))
+        shutdown = self.run_monitor([0, 1, 0, 0, 0])
+        self.assertEqual(self.clock, 19.1)
+        shutdown.assert_called_once()
+
+    def test_ignition_high_never_requests_shutdown_and_stop_is_clean(self):
+        self.stopped.wait.side_effect = lambda _interval: setattr(
+            self.stopped.is_set, "return_value", True)
+        shutdown = self.run_monitor([1])
+        shutdown.assert_not_called()
+
+    def test_stop_during_countdown_does_not_poweroff(self):
+        self.stopped.wait.side_effect = lambda _interval: setattr(
+            self.stopped.is_set, "return_value", True)
+        shutdown = self.run_monitor([0])
+        shutdown.assert_not_called()
+
+    def test_invalid_gpio_value_and_read_failure_do_not_poweroff(self):
+        for error in (ValueError, OSError):
+            with self.subTest(error=error):
+                read = mock.Mock(return_value=2) if error is ValueError else mock.Mock(
+                    side_effect=OSError("GPIO read failed"))
+                with mock.patch.object(self.module["subprocess"], "run") as shutdown:
+                    with self.assertRaises(error):
+                        self.monitor(read, self.stopped)
+                    shutdown.assert_not_called()
+
+    def test_rejected_shutdown_is_not_reported_as_success(self):
+        readings = iter([0, 0])
+        self.stopped.wait.side_effect = lambda _interval: setattr(self, "clock", 10.0)
+        with mock.patch.object(self.module["time"], "monotonic",
+                               side_effect=lambda: self.clock):
+            with mock.patch.object(self.module["subprocess"], "run",
+                                   side_effect=subprocess.CalledProcessError(1, "systemctl")):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    self.monitor(lambda: next(readings), self.stopped)
+
+    def gpio_fixture(self, latch_consumer="power_ctrl"):
+        gpiod = mock.MagicMock()
+        chip = gpiod.Chip.return_value.__enter__.return_value
+        ignition = mock.Mock()
+        latch = mock.Mock()
+        latch.consumer.return_value = latch_consumer
+        chip.find_line.side_effect = lambda name: {"GPIO12": ignition, "GPIO25": latch}[name]
+        return gpiod, chip, ignition, latch
+
+    def test_discovers_bank_by_line_names_not_gpiochip_number(self):
+        for chip_number in (0, 4):
+            with self.subTest(chip_number=chip_number):
+                gpiod, _, ignition, latch = self.gpio_fixture()
+                run = self.module["run"]
+                with mock.patch.dict(sys.modules, {"gpiod": gpiod}):
+                    with mock.patch.object(Path, "glob",
+                                           return_value=[Path(f"/dev/gpiochip{chip_number}")]):
+                        with mock.patch.dict(run.__globals__, {"monitor": mock.Mock()}) as env:
+                            run(self.stopped)
+                            env["monitor"].assert_called_once_with(
+                                ignition.get_value, self.stopped)
+                gpiod.Chip.assert_called_once_with(f"/dev/gpiochip{chip_number}")
+                ignition.request.assert_called_once_with(
+                    consumer="livi-carpihat-ignition",
+                    type=gpiod.LINE_REQ_DIR_IN,
+                    flags=gpiod.LINE_REQ_FLAG_BIAS_PULL_DOWN,
+                )
+                ignition.release.assert_called_once()
+                latch.request.assert_not_called()
+                latch.set_value.assert_not_called()
+
+    def test_missing_or_wrong_latch_fails_without_requesting_ignition(self):
+        for chips, owner in (([], "power_ctrl"), ([Path("/dev/gpiochip0")], "other")):
+            gpiod, _, ignition, _ = self.gpio_fixture(owner)
+            with mock.patch.dict(sys.modules, {"gpiod": gpiod}):
+                with mock.patch.object(Path, "glob", return_value=chips):
+                    with self.assertRaisesRegex(RuntimeError, "kernel's"):
+                        self.module["run"](self.stopped)
+            ignition.request.assert_not_called()
+
+    def test_missing_line_or_ambiguous_banks_are_rejected(self):
+        for missing in ("GPIO12", "GPIO25", None):
+            with self.subTest(missing=missing):
+                gpiod, chip, ignition, latch = self.gpio_fixture()
+                lines = {"GPIO12": ignition, "GPIO25": latch}
+                if missing:
+                    lines[missing] = None
+                chip.find_line.side_effect = lines.get
+                with mock.patch.dict(sys.modules, {"gpiod": gpiod}):
+                    with mock.patch.object(Path, "glob", return_value=[
+                            Path("/dev/gpiochip0"), Path("/dev/gpiochip4")]):
+                        with self.assertRaises(RuntimeError):
+                            self.module["run"](self.stopped)
+                ignition.request.assert_not_called()
+
+    def test_gpio_request_failure_is_propagated_without_touching_latch(self):
+        gpiod, _, ignition, latch = self.gpio_fixture()
+        ignition.request.side_effect = OSError("GPIO already in use")
+        with mock.patch.dict(sys.modules, {"gpiod": gpiod}):
+            with mock.patch.object(Path, "glob", return_value=[Path("/dev/gpiochip4")]):
+                with self.assertRaisesRegex(OSError, "already in use"):
+                    self.module["run"](self.stopped)
+        ignition.release.assert_not_called()
+        latch.request.assert_not_called()
+
+    def test_gpio_is_released_on_monitor_failure_but_latch_is_not_touched(self):
+        gpiod, _, ignition, latch = self.gpio_fixture()
+        run = self.module["run"]
+        with mock.patch.dict(sys.modules, {"gpiod": gpiod}):
+            with mock.patch.object(Path, "glob", return_value=[Path("/dev/gpiochip4")]):
+                with mock.patch.dict(run.__globals__, {
+                        "monitor": mock.Mock(side_effect=OSError("read failed"))}):
+                    with self.assertRaises(OSError):
+                        run(self.stopped)
+        ignition.release.assert_called_once()
+        latch.release.assert_not_called()
+
+    def test_service_starts_early_and_leaves_latch_to_kernel_on_stop(self):
+        unit = configparser.ConfigParser(interpolation=None)
+        unit.read(SCRIPTS.parent / "lib/systemd/system/livi-carpihat-power.service")
+        self.assertEqual(unit["Unit"]["DefaultDependencies"], "no")
+        self.assertIn("sysinit.target", unit["Unit"]["Before"].split())
+        self.assertIn("shutdown.target", unit["Unit"]["Conflicts"].split())
+        self.assertEqual(unit["Service"]["Restart"], "on-failure")
+        self.assertNotIn("ExecStop", unit["Service"])
+        self.assertEqual(unit["Service"]["RestrictAddressFamilies"], "AF_UNIX")
+        postbuild = (ROOT / "board/drskunk/livi/post-build.sh").read_text()
+        self.assertIn('"${LIVI_CARPIHAT-1}" = 1', postbuild)
+        self.assertIn("sysinit.target.wants/livi-carpihat-power.service", postbuild)
 
 
 if __name__ == "__main__":
