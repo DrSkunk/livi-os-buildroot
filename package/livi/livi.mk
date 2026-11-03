@@ -21,7 +21,7 @@ define LIVI_INSTALL_TARGET_CMDS
 		$(HOST_DIR)/bin/unsquashfs -no-progress -d $(@D)/factory -o "$$offset" "$(LIVI_APPIMAGE)" \
 		resources/driver resources/core resources/compositor resources/gst-host livi-ui \
 		resources/livi-os-helper-api resources/99-LIVI.rules.template resources/livi-touch-filter \
-		resources/livi-wifi-ap.service.template
+		resources/livi-wifi-ap.service.template resources/livi-os-display-api
 	test -f $(@D)/factory/resources/livi-os-helper-api && \
 		test "$$(cat $(@D)/factory/resources/livi-os-helper-api)" = 2 || \
 		{ echo "Factory AppImage must implement LIVI OS API 2 (Rust); see docs/rust-appimage-contract.md." >&2; exit 1; }

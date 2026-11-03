@@ -349,6 +349,17 @@ app repository and declare helper API `2` in `resources/livi-os-helper-api`.
 See the [complete Rust app contract](docs/rust-appimage-contract.md), including
 wireless service integration, helper lifeline and readiness reporting.
 The obsolete five-argument projection wrapper is not the native API-2 interface.
+The payload must also declare display API `1` in
+`resources/livi-os-display-api`. This prevents older helper-compatible nightlies
+that ignore the Waveshare rotation request from being built into this appliance.
+The appliance requests `LIVI_GST_HEVC_LEGACY_SLICE=1` for the pinned 6.12
+HEVC driver. Its slice-length ABI differs from the newer GStreamer backport;
+matching it restored smooth hardware-decoded Android Auto video. The app
+launcher supplies the same default for app-only updates on older images, and
+the media bundle must include the matching compatibility patch.
+Fresh appliance configurations use 140 projection DPI so Android Auto controls
+fit the 1280x400 panel. Change it in Settings > Video > Main Video > DPI;
+existing saved settings are preserved.
 Image creation rejects older payloads; there is no Electron compatibility mode.
 The factory payload is checksum-checked at installation and reinstalled when its
 file/checksum changes during an incremental build.

@@ -12,7 +12,8 @@ BINARIES = ("livi-ui", "resources/core/livi-core",
             "resources/compositor/livi-compositor", "resources/gst-host/livi-gst-host",
             "resources/driver/livi-helperd")
 RESOURCES = ("resources/livi-os-helper-api", "resources/99-LIVI.rules.template",
-             "resources/livi-touch-filter", "resources/livi-wifi-ap.service.template")
+             "resources/livi-touch-filter", "resources/livi-wifi-ap.service.template",
+             "resources/livi-os-display-api")
 
 
 def regular_file(root, relative):
@@ -32,6 +33,10 @@ def check(root):
     marker = regular_file(root, "resources/livi-os-helper-api")
     if marker.read_text().strip() != "2":
         raise ValueError("Rust AppImage must implement LIVI OS API 2")
+    display = regular_file(root, "resources/livi-os-display-api")
+    if display.read_text().strip() != "1":
+        raise ValueError("Rust AppImage must implement LIVI OS display API 1 "
+                         "(Waveshare rotation, touch and presented-frame readiness)")
     for relative in BINARIES:
         path = regular_file(root, relative)
         if path.stat().st_mode & 0o111 == 0:

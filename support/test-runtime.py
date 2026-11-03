@@ -22,6 +22,7 @@ SCRIPTS = ROOT / "board/drskunk/livi/rootfs-overlay/usr/bin"
 DISPLAY_DEFAULTS = {
     "projectionWidth": 1280,
     "projectionHeight": 400,
+    "projectionDpi": 140,
     "clusterWidth": 1280,
     "clusterHeight": 400,
 }
@@ -199,6 +200,7 @@ class RustPayload(unittest.TestCase):
             path.chmod(0o755)
         for relative in self.module["RESOURCES"]:
             (self.path / relative).write_text("2\n")
+        (self.path / "resources/livi-os-display-api").write_text("1\n")
 
     def check(self):
         self.module["check"](self.path)
@@ -210,6 +212,21 @@ class RustPayload(unittest.TestCase):
         (self.path / "resources/livi-os-helper-api").write_text("1\n")
         with self.assertRaises(ValueError):
             self.check()
+
+    def test_api2_without_appliance_display_support_is_rejected(self):
+        display = self.path / "resources/livi-os-display-api"
+        display.unlink()
+        with self.assertRaisesRegex(ValueError, "livi-os-display-api"):
+            self.check()
+        display.write_text("0\n")
+        with self.assertRaisesRegex(ValueError, "display API 1"):
+            self.check()
+
+    def test_appliance_requests_the_fixed_panel_rotation_without_saved_config(self):
+        source = (SCRIPTS / "livi-supervisor").read_text()
+        for setting in ("LIVI_MAIN_CONNECTOR=HDMI-A-1", "LIVI_DISPLAY_MODE=400x1280@60",
+                        "LIVI_MAIN_TRANSFORM=90", "LIVI_MAIN_SCALE=1"):
+            self.assertIn(setting, source)
 
     def test_missing_or_nonexecutable_binary_is_rejected(self):
         path = self.path / "livi-ui"
@@ -842,7 +859,7 @@ dbus-run-session() {
   echo session > "$TEST_DIR/session"
   test "$1" = --
   shift
-  printf '%s\\n' "$HOME" "$XKB_CONFIG_ROOT" "$LIVI_COMPOSITOR_BACKEND" "$LIVI_MAIN_TRANSFORM" "$*" > "$TEST_DIR/environment"
+  printf '%s\\n' "$HOME" "$XKB_CONFIG_ROOT" "$LIVI_COMPOSITOR_BACKEND" "$LIVI_MAIN_TRANSFORM" "$LIVI_GST_HEVC_LEGACY_SLICE" "$*" > "$TEST_DIR/environment"
 }
 '''
             subprocess.run(
@@ -853,7 +870,7 @@ dbus-run-session() {
             self.assertTrue((path / "session").exists())
             self.assertEqual(
                 (path / "environment").read_text().splitlines(),
-                ["/data/livi/home", "/usr/share/X11/xkb", "drm", "90", "/test/LIVI.AppImage"],
+                ["/data/livi/home", "/usr/share/X11/xkb", "drm", "90", "1", "/test/LIVI.AppImage"],
             )
 
 

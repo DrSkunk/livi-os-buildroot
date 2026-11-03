@@ -21,6 +21,11 @@ resources/driver/livi-helperd
 Also ship `resources/99-LIVI.rules.template`, `resources/livi-touch-filter`,
 `resources/livi-wifi-ap.service.template`,
 and `resources/livi-os-helper-api` containing `2` followed by a newline.
+Also require `resources/livi-os-display-api` containing `1` followed by a newline.
+This additional capability marker covers DRM rotation, touch and presented-frame
+readiness. API-2 helper compatibility alone is insufficient: older nightlies
+declared API 2 while ignoring the appliance's rotation request. Image builds
+and downloads reject such payloads instead of producing a wrongly oriented image.
 Only advertise API 2 once the behavior below is implemented. AppRun must
 foreground/supervise `livi-core`, propagate shutdown and return failure on
 unrecoverable startup errors. Keep the existing ARM64 AppImage release naming.
@@ -56,6 +61,7 @@ LIVI_MAIN_CONNECTOR=HDMI-A-1
 LIVI_DISPLAY_MODE=400x1280@60
 LIVI_MAIN_TRANSFORM=90
 LIVI_MAIN_SCALE=1
+LIVI_GST_HEVC_LEGACY_SLICE=1
 LIVI_OS_READY_FILE=/run/user/1000/livi-os-ready.json
 LIVI_OS_SESSION_FILE=/run/user/1000/livi-os-session
 ```
@@ -68,6 +74,20 @@ than synthesizing CVT timings. Scan out 400x1280 and rotate to a logical
 1280x400 desktop; transform USB touch coordinates once, including all corners.
 Do not silently substitute a desktop-monitor mode or claim readiness on it.
 Keep secondary HDMI outputs disabled unless explicitly configured.
+
+The pinned 6.12 `rpi-hevc-dec` driver interprets HEVC `bit_size` as the end of
+slice data relative to the queued buffer; it subtracts `data_byte_offset`.
+The media bundle's newer GStreamer backport instead uses payload lengths.
+That ABI mismatch produced green video even after correcting capture-layout
+and Wayland stride handling. The bundled V4L2 plugin must honor
+`LIVI_GST_HEVC_LEGACY_SLICE=1` to send the legacy end offset, accounting for
+preceding slices in the queued buffer. Matching this ABI restored smooth
+hardware H.265 Android Auto video on the Pi.
+
+The app's API-2 launcher must set the same flag for app-only updates on older
+images. Desktop launches retain the modern default. Reassess the compatibility
+flag when upgrading the kernel driver. `LIVI_GST_SWDEC=1` remains an explicit
+software fallback and must affect both codec probing and playback.
 
 Use the existing system PipeWire/PulseAudio/WirePlumber services; do not spawn
 duplicates or assume `systemctl --user` units. Keep HOME-backed defaults and

@@ -96,6 +96,7 @@ HOME=/data/livi/home TMPDIR=/data/livi/update XDG_RUNTIME_DIR=/run/user/1000 \
   LIVI_OS_API=2 LIVI_COMPOSITOR_BACKEND=drm \
   LIVI_MAIN_CONNECTOR=HDMI-A-1 LIVI_DISPLAY_MODE=400x1280@60 \
   LIVI_MAIN_TRANSFORM=90 LIVI_MAIN_SCALE=1 \
+  LIVI_GST_HEVC_LEGACY_SLICE=1 \
   LIVI_OS_READY_FILE=/run/user/1000/livi-os-ready.json \
   LIVI_OS_SESSION_FILE=/run/user/1000/livi-os-session \
   LIVI_KIOSK=1 LIVI_OS=1 dbus-run-session -- "$CURRENT" >"$runtime/output" 2>&1 &
