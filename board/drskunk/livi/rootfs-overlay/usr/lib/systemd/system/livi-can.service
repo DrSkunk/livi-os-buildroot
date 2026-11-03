@@ -1,6 +1,8 @@
 [Unit]
-Description=Configure TJD CarPiHAT CAN interface in listen-only mode
+Description=Configure Haltech CAN interface at 1 Mbit/s in listen-only mode
 After=systemd-modules-load.service systemd-udev-trigger.service
+BindsTo=sys-subsystem-net-devices-can0.device
+After=sys-subsystem-net-devices-can0.device
 ConditionPathExists=/sys/class/net/can0
 
 [Service]
@@ -9,6 +11,3 @@ ExecStart=/usr/sbin/ip link set dev can0 down
 ExecStart=/usr/sbin/ip link set dev can0 type can bitrate 1000000 listen-only on
 ExecStart=/usr/sbin/ip link set dev can0 up
 RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target

@@ -17,9 +17,6 @@ dtparam=i2c_arm=on
 dtoverlay=i2c-gpio,bus=2,i2c_gpio_sda=19,i2c_gpio_scl=26,i2c_gpio_delay_us=5
 # Pi 4 has no RTC. For an optional DS3231 module on I2C1 (GPIO2/3), uncomment:
 #dtoverlay=i2c-rtc,ds3231
-# TJD CarPiHAT MCP2515 CAN controller (8 MHz crystal, BCM23 interrupt).
-dtparam=spi=on
-dtoverlay=mcp2515-can0,oscillator=8000000,interrupt=23
-dtoverlay=spi-bcm2835-overlay
+# HAT CAN is appended by post-image.sh with a verified LIVI_CAN_OSCILLATOR.
 # Keep the watchdog active until systemd takes over.
 kernel_watchdog_timeout=120

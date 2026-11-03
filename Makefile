@@ -6,6 +6,9 @@ LIVI_REPO ?= DrSkunk/LIVI
 LIVI_CHANNEL ?= nightly
 LIVI_OS_SIGNING_KEY ?=
 LIVI_APPIMAGE ?= artifacts/LIVI-arm64.AppImage
+LIVI_CARPIHAT ?= 1
+LIVI_CAN_OSCILLATOR ?=
+export LIVI_CARPIHAT LIVI_CAN_OSCILLATOR
 
 .PHONY: help bootstrap pi4_defconfig pi5_defconfig pi4 pi5 pi4-update pi5-update menuconfig linux-menuconfig clean fetch-livi check check-livi test-runtime test-fetch-livi
 
@@ -19,6 +22,10 @@ help:
 	@echo "make check-livi      Validate the local Rust/API-2 AppImage before building"
 	@echo "make test-runtime    Test runtime configuration and recovery"
 	@echo "make test-fetch-livi Test release selection without downloading an AppImage"
+	@echo "LIVI_CARPIHAT=0      Disable default CarPiHAT ignition/power control (Pi 4/5)"
+	@echo "LIVI_CAN_OSCILLATOR=8000000/16000000/20000000 Enable HAT CAN with its actual crystal"
+	@echo "                    8 MHz supports confirmed 500 kbit/s OBD-II, not 1 Mbit/s Haltech V2"
+	@echo "                    Empty: no SPI CAN overlay; use a compatible USB CAN adapter"
 
 bootstrap:
 	@if test -d "$(BUILDROOT_DIR)/.git" && test "$$(git -C "$(BUILDROOT_DIR)" rev-parse HEAD)" != "$(BUILDROOT_COMMIT)"; then \

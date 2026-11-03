@@ -29,12 +29,16 @@ done < "$scripts"
 for required in \
   board/drskunk/livi/rootfs-overlay/usr/bin/livi-os-slot \
   board/drskunk/livi/rootfs-overlay/usr/bin/livi-os-update \
+  board/drskunk/livi/rootfs-overlay/usr/libexec/livi-os-update-helper \
+  board/drskunk/livi/rootfs-overlay/usr/libexec/livi-power-helper \
   board/drskunk/livi/rootfs-overlay/usr/bin/livi-data-grow \
   support/make-os-update \
   board/drskunk/livi/rootfs-overlay/usr/libexec/livi-projection-helper \
   board/drskunk/livi/rootfs-overlay/usr/libexec/livi-kiosk-ready \
   board/drskunk/livi/rootfs-overlay/usr/libexec/livi-splash-start \
   board/drskunk/livi/rootfs-overlay/usr/libexec/livi-splash-stop \
+  board/drskunk/livi/rootfs-overlay/usr/libexec/livi-carpihat-power \
+  board/drskunk/livi/rootfs-overlay/usr/libexec/livi-obd2 \
   board/drskunk/livi/rootfs-overlay/usr/libexec/livi-qemu-check \
   board/drskunk/livi/post-fakeroot.sh \
   support/qemu-pi4 \
@@ -92,22 +96,15 @@ for board in rpi4 rpi5; do
   }
 done
 
-for symbol in CONFIG_DRM_VC4 CONFIG_SND_SOC CONFIG_INPUT_EVDEV CONFIG_HID CONFIG_HID_GENERIC CONFIG_USB_HID CONFIG_HID_MULTITOUCH CONFIG_USER_NS CONFIG_SPI CONFIG_SPI_BCM2835 CONFIG_CAN CONFIG_CAN_RAW CONFIG_CAN_DEV; do
+for symbol in CONFIG_DRM_VC4 CONFIG_SND_SOC CONFIG_INPUT_EVDEV CONFIG_HID CONFIG_HID_GENERIC CONFIG_USB_HID CONFIG_HID_MULTITOUCH CONFIG_USER_NS CONFIG_SPI CONFIG_SPI_BCM2835 CONFIG_CAN CONFIG_CAN_RAW CONFIG_CAN_DEV CONFIG_CAN_CALC_BITTIMING CONFIG_GPIO_CDEV CONFIG_GPIO_CDEV_V1 CONFIG_POWER_RESET CONFIG_POWER_RESET_GPIO; do
   grep -qx "$symbol=y" "$root/board/drskunk/livi/linux.fragment" || {
-    echo "missing HDMI/USB touch kernel option: $symbol" >&2
+    echo "missing runtime kernel option: $symbol" >&2
     failed=1
   }
 done
-grep -qx 'CONFIG_CAN_MCP251X=m' "$root/board/drskunk/livi/linux.fragment" || {
-  echo "missing CarPiHAT MCP2515 kernel module" >&2
-  failed=1
-}
-for overlay_line in \
-  'dtparam=spi=on' \
-  'dtoverlay=mcp2515-can0,oscillator=8000000,interrupt=23' \
-  'dtoverlay=spi-bcm2835-overlay'; do
-  grep -qx "$overlay_line" "$root/board/drskunk/livi/config-rpi4.txt" || {
-    echo "missing CarPiHAT device-tree setting: $overlay_line" >&2
+for module in CONFIG_CAN_MCP251X CONFIG_CAN_GS_USB; do
+  grep -qx "$module=m" "$root/board/drskunk/livi/linux.fragment" || {
+    echo "missing CAN kernel module: $module" >&2
     failed=1
   }
 done
@@ -175,9 +172,9 @@ for board in pi4 pi5; do
     echo "missing host XZ kernel-module indexing support: $board" >&2
     failed=1
   }
-  for symbol in BR2_PACKAGE_KMOD BR2_PACKAGE_KMOD_TOOLS BR2_PACKAGE_XZ; do
+  for symbol in BR2_PACKAGE_KMOD BR2_PACKAGE_KMOD_TOOLS BR2_PACKAGE_XZ BR2_PACKAGE_PYTHON3 BR2_PACKAGE_LIBGPIOD BR2_PACKAGE_LIBGPIOD_TOOLS BR2_PACKAGE_CAN_UTILS; do
     grep -qx "$symbol=y" "$output_base/$board/.config" || {
-      echo "missing target XZ kernel-module loading support: $board $symbol" >&2
+      echo "missing target runtime dependency: $board $symbol" >&2
       failed=1
     }
   done

@@ -38,8 +38,8 @@ The configuration includes:
 - Mesa V3D/VC4, DRM/KMS, Wayland, seatd and libinput for the Rust compositor
 - PipeWire, its PulseAudio compatibility server, and WirePlumber
 - Python 3 for OS recovery, readiness and CAN capture tools; immutable Rust projection helper
-- SPI/MCP2515 drivers and listen-only CAN tooling; the fixed 1 Mbit/s service
-  still needs adaptation for stock 8 MHz CarPiHAT hardware (see below)
+- SPI/MCP2515 and gs_usb drivers, CAN hotplug configuration, and checked
+  1 Mbit/s listen-only capture (see hardware clock requirements below)
 - libxkbcommon, libgudev and libva for the Rust graphics/media runtime
 - PulseAudio client tools for volume control, and SBC for PipeWire Bluetooth audio
 - RetroArch 1.22.2 with pinned NES, SNES, GB/GBC, GBA, Genesis and Master System cores
@@ -144,6 +144,11 @@ make check-livi
 make pi4
 make pi5
 ```
+
+Both images enable CarPiHAT ignition/power control by default. For USB-C-only
+bench use without a HAT, build with `make pi5 LIVI_CARPIHAT=0` (or `make pi4
+LIVI_CARPIHAT=0`). An empty `LIVI_CARPIHAT=` also disables it. Use the same
+setting when rebuilding images for signed OS updates.
 
 Outputs:
 
@@ -333,8 +338,13 @@ The host key is generated on first boot and stored on the writable data partitio
 
 The application supervisor, logger and configuration guard run as `livi`, not
 root, so writable AppImage/configuration paths cannot turn their file operations
-into privileged writes. LIVI can elevate only `/usr/libexec/livi-projection-helper`
-and the exact `livi-os-slot mark-good` / `boot-failed` boot-health commands. The launcher
+into privileged writes. LIVI can elevate only the fixed projection, CAN capture,
+OS-update and power helpers and the exact `livi-os-slot mark-good` / `boot-failed`
+boot-health commands. The power helper accepts only `poweroff` or `reboot`, refuses
+while an OS update is running, and queues an orderly systemd shutdown/reset.
+The app's System power pages require a confirmation click and report helper
+failures without closing the app. A new OS image is needed to bootstrap this
+helper on older installations. The projection launcher
 validates five explicit arguments, discards the inherited environment, and runs
 the immutable `/usr/lib/livi/livi-helperd` Rust binary without command-line switches.
 There is no writable-helper sudo rule or `SETENV` permission. Helper code changes
@@ -387,6 +397,9 @@ and checksum as a workflow artifact, without replacing the nightly release when
 building a topic branch.
 
 ## Flashing
+
+For illustrated first-boot steps, two mounting options and optional audio/vehicle
+wiring, see the [Pi 5 quick-start guide](docs/hardware-setup-pi5.md).
 
 Double-check the destination device. Writing an image destroys its existing
 partition table and filesystems.
@@ -442,14 +455,62 @@ four touch corners on the physical panel before installation.
 
 ### Haltech CAN V2 telemetry
 
-The Pi 4 image includes a receive-only CAN service, but its fixed 1 Mbit/s
-setting is incompatible with the stock 8 MHz CarPiHAT MCP2515 controller.
-See the [Haltech CAN wiring and setup guide](docs/HALTECH-CAN.md) for hardware
-limitations, supported ECU routes and remaining OS integration requirements.
-Do not treat the current image as a verified CarPiHAT telemetry solution.
-QEMU cannot verify MCP2515 electrical behavior or the vehicle bus.
+Both Pi images configure `can0` at 1 Mbit/s, listen-only, when the device
+appears. Capture verifies the interface state and forwards RPM, speed, battery,
+coolant, oil pressure, lambda and both knock levels to the updated LIVI app.
+Build both the updated AppImage and OS; an app update alone cannot expand the
+old OS capture filter.
+
+For HAT CAN, set `LIVI_CAN_OSCILLATOR=16000000` or `20000000` **only to match
+the actual crystal**. The build adds SPI0 CS0/MCP2515 configuration on either
+Pi, keeping BCM7 free for reverse sensing. Empty (default) leaves SPI CAN off
+and supports a compatible `gs_usb` adapter as `can0`. The older 8 MHz
+CarPiHAT cannot receive this 1 Mbit/s broadcast. Its 8 MHz clock can instead
+be used for the optional OBD-II backend on a verified 500 kbit/s bus below.
+See the [Haltech CAN guide](docs/HALTECH-CAN.md) for Elite 2500 auxiliary-port
+setup, wiring, termination and acceptance checks. Hardware clock identification
+and real-bus commissioning remain required; QEMU cannot verify them.
+
+### Optional Haltech OBD-II polling
+
+The updated app can select **Settings > Car > CAN Telemetry > CAN backend >
+Haltech OBD-II**. This is a separate **active**, read-only Service 01 backend,
+not the Haltech V2 receiver. Select the verified bus bitrate (500 kbit/s or
+1 Mbit/s), acknowledge that wiring/bitrate/ECU assignment have been validated,
+then switch on **Enable CAN telemetry**. It is off by default. Changing the
+bitrate clears the acknowledgement until it is confirmed again.
+
+Build a physical 8 MHz HAT with `LIVI_CAN_OSCILLATOR=8000000` only for an
+actually confirmed 500 kbit/s OBD-II connection. This does **not** make its
+1 Mbit/s Haltech V2 capture work. The Elite auxiliary Vehicle CAN's OBD-II
+bitrate remains installation-specific/unverified; use a compatible USB CAN
+adapter if the ECU requires 1 Mbit/s.
+
+The immutable worker permits only twelve live-data PIDs and three capability
+bitmaps, at most ten requests/second, with one outstanding request. No ECU
+writes, actuator controls, arbitrary IDs or application-supplied payloads are
+accepted. It stops on app disconnect/disable and leaves `can0` down. Passive
+and OBD backends have exclusive ownership; ignition handling is unchanged.
+See [OBD-II setup and limits](docs/HALTECH-CAN.md#7-optional-elite-obd-ii-backend).
 
 ## Disk layout and power-loss behaviour
+
+### CarPiHAT ignition control
+
+With the default `LIVI_CARPIHAT=1`, firmware asserts BCM25 at startup and the
+built-in `gpio-poweroff` driver holds the power latch until final poweroff.
+`livi-carpihat-power.service` monitors the HAT's conditioned BCM12 ignition input,
+starting before `sysinit.target`. After ten continuous seconds of ignition off,
+it requests an orderly systemd poweroff; ignition returning during that countdown
+cancels it. The kernel releases the latch only after shutdown, not when the
+monitor stops or restarts.
+
+Keep the HAT on protected permanent +12V, with ACC/IGN connected separately.
+Once shutdown has started, allow it to finish; restarting may require an
+ignition off/on cycle. See the [power wiring and commissioning checks](docs/hardware-setup-pi5.md#carpihat--wire-power-and-ignition).
+GPIO discovery uses line names and the kernel-owned latch, not a fixed gpiochip
+number, so it accommodates both Pi 4 and Pi 5. GPIO failures are logged to the
+journal and leave the latch held rather than cutting power unexpectedly.
 
 | Partition | Filesystem | Normal mount | Purpose |
 |---|---|---|---|
@@ -661,6 +722,17 @@ and the ordering serial (default commit time).
 
 ### Installing
 
+The custom Rust app also exposes signed OS updates alongside application updates
+under **Settings -> System -> Software Update**. The image ships the root-owned
+`/usr/libexec/livi-os-update-helper` and a narrowly scoped `NOSETENV` sudo grant.
+It accepts only status, stable/nightly checking and staging, and applying a staged
+trial; it cannot select a manifest path or bypass signature/downgrade/failed-trial
+checks. Download progress counts verified whole images, followed by inactive-slot
+write/readback phases. **Download and stage** does not reboot. **Reboot...** opens
+a separate confirmation; **Later** keeps the OS staged for the next power-on.
+The app channel and OS channel are independent. Older images without this helper
+need a new OS image to bootstrap the UI integration, not broader sudo permissions.
+
 ```sh
 livi-os-update status              # installed version, slot, staged update
 livi-os-update check               # newest release on the channel
@@ -723,11 +795,9 @@ messages are tracked separately so rotation cannot erase a failed health check.
 
 ## Diagnostics
 
-For CarPiHAT hardware compatibility, Haltech ECU configuration, required
-RPM/speed frames and listen-only commissioning, see
-[Haltech CAN telemetry](docs/HALTECH-CAN.md). The guide distinguishes the
-standard 1 Mbit/s connection from a conditional Nexus GCAN setup at 500 kbit/s;
-the image's CAN integration is not yet complete.
+For CarPiHAT hardware compatibility, Elite 2500 auxiliary-port configuration,
+decoded signals and listen-only commissioning, see
+[Haltech CAN telemetry](docs/HALTECH-CAN.md).
 
 On the target:
 

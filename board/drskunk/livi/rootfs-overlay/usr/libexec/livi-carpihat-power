@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""Monitor CarPiHAT ignition without taking ownership of the kernel power latch."""
+
+from contextlib import ExitStack
+from collections.abc import Callable
+import logging
+from pathlib import Path
+import signal
+import subprocess
+from threading import Event
+import time
+
+
+LOG = logging.getLogger("livi-carpihat-power")
+OFF_DELAY = 10.0
+POLL_INTERVAL = 0.1
+
+
+def monitor(read_ignition: Callable[[], int], stopped: Event) -> None:
+    off_since = None
+    while not stopped.is_set():
+        value = read_ignition()
+        if value not in (0, 1):
+            raise ValueError(f"Invalid ignition GPIO value: {value!r}")
+        now = time.monotonic()
+        if value:
+            if off_since is not None:
+                LOG.info("Ignition restored; cancelling key-off countdown")
+            off_since = None
+        elif off_since is None:
+            LOG.info("Ignition off; shutting down after %.0f seconds", OFF_DELAY)
+            off_since = now
+        elif now - off_since >= OFF_DELAY:
+            LOG.info("Ignition remained off; requesting orderly poweroff")
+            subprocess.run(
+                ["/usr/bin/systemctl", "--no-block", "poweroff"],
+                check=True,
+                timeout=10,
+            )
+            return
+        stopped.wait(POLL_INTERVAL)
+
+
+def run(stopped: Event) -> None:
+    import gpiod
+
+    with ExitStack() as stack:
+        candidates = []
+        for path in sorted(Path("/dev").glob("gpiochip*")):
+            chip = stack.enter_context(gpiod.Chip(str(path)))
+            ignition = chip.find_line("GPIO12")
+            latch = chip.find_line("GPIO25")
+            if ignition is not None and latch is not None:
+                if latch.consumer() == "power_ctrl":
+                    candidates.append(ignition)
+        if len(candidates) != 1:
+            raise RuntimeError(
+                "Expected one GPIO12 on the bank with the kernel's "
+                f"CarPiHAT GPIO25 power latch; found {len(candidates)}"
+            )
+        ignition = candidates[0]
+        ignition.request(
+            consumer="livi-carpihat-ignition",
+            type=gpiod.LINE_REQ_DIR_IN,
+            flags=gpiod.LINE_REQ_FLAG_BIAS_PULL_DOWN,
+        )
+        stack.callback(ignition.release)
+        LOG.info("Monitoring GPIO12; kernel owns GPIO25 until final poweroff")
+        monitor(ignition.get_value, stopped)
+
+
+def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
+    stopped = Event()
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(signum, lambda _signum, _frame: stopped.set())
+    try:
+        run(stopped)
+    except (ImportError, OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+        LOG.exception("CarPiHAT ignition control failed; keeping the power latch held")
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()

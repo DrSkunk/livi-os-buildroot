@@ -6,6 +6,27 @@ Electron/API-1 payloads are intentionally unsupported. Do not upgrade an
 existing Electron installation through its application updater: deploy a full
 OS image and back up configuration first.
 
+## Haltech CAN capture
+
+For Haltech CAN, the updated core and OS capture helper accept standard data
+IDs `360`, `361`, `368`, `36A`, `370`, `372`, `3E0` (hex). The immutable
+no-argument `/usr/libexec/livi-can-capture` configures/verifies `can0` at
+1 Mbit/s listen-only and emits candump-format receive lines only. Diagnostics
+go to stderr, failures exit nonzero. The core decodes RPM, speed, battery,
+coolant, oil gauge pressure, sensor-1 lambda and two knock levels, expiring
+each value after 1.5 seconds. Install both the updated app and OS to expand
+the old two-ID filter. This is additive within API 2: old apps ignore extra
+frames, and no new privileged arguments are introduced.
+
+The optional active OBD-II backend uses a separate immutable entry point:
+`sudo -n /usr/libexec/livi-obd2 500000` or `1000000`, with stdin retained as a
+lifeline. It permits only a fixed Service 01 PID allowlist and diagnostic IDs;
+the app cannot provide frames, identifiers or commands. The app must stop/reap
+one backend before enabling the other. It publishes the same normalized fields
+plus `obd2` health; stderr and nonzero exit indicate failure. The app defaults
+to passive V2/off and requires an explicit validated-bus acknowledgement before
+OBD polling. Both the updated OS helper/sudoers and app controls are required.
+
 ## Required payload
 
 Ship these regular executable Linux AArch64 ELF files:
@@ -109,6 +130,42 @@ the existing upstream `sudo -E` launch is not compatible.
 
 Native Apple CarPlay remains outside this image's acceptance scope. Do not
 enable it by default or substitute authentication bypasses.
+
+## Optional signed OS updater integration
+
+The app's Settings -> System -> Software Update can use the separate immutable
+`/usr/libexec/livi-os-update-helper` through `sudo -n`. This interface does not
+change the projection-helper ABI or permit calling writable helper binaries.
+The wrapper clears the environment and accepts exactly `status`, `check stable`,
+`check nightly`, `stage stable`, `stage nightly`, or `apply`. No file paths,
+repository overrides, downgrade flags or failed-trial retries are exposed.
+
+`status` returns the updater's JSON (`board`, `version`, `serial`, `slot`,
+`trial`, `pending`, `staged`, `update_key`). `check` returns the signed-manifest
+assessment (`channel`, `installed`, `available`, `update`). `stage` invokes
+`livi-os-update update --channel CHANNEL --progress` and streams newline-delimited
+JSON: `phase` (`downloading` / `staging`), `message`, `received`, `total`.
+Download byte counts advance after each image's size/hash verification; staging
+reports the root/boot write/readback phases. Exit status is authoritative: a
+progress line is never proof of a successfully staged image. Refresh `status`
+after completion, including failures.
+
+Staging never reboots. Require explicit user confirmation before `apply` and
+recheck the pending/staged identity before sending it. The OS still tries staged
+updates at the next power-on. Do not expose mark-good, cancel, retry-failed or
+allow-downgrade through the UI helper; preserve the OS health-based confirmation
+and automatic rollback described below.
+
+## Host power controls
+
+The separate immutable `/usr/libexec/livi-power-helper` accepts exactly one
+argument, `poweroff` or `reboot`. Its `NOSETENV` sudoers grant names those exact
+two command lines. The wrapper validates arguments, clears its environment,
+refuses while the OS-update lock is held, and queues
+`/usr/bin/systemctl --no-block ACTION`. It cannot operate arbitrary services or
+force a reset. Core must await the exit status and show failures without
+quitting first. System power pages require a confirmation click, and application
+update relaunches must not be interpreted as host reboot requests.
 
 ## Readiness and recovery
 

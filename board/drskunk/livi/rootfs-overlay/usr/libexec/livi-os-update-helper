@@ -1,0 +1,28 @@
+#!/bin/sh
+set -eu
+
+fail() { echo "livi-os-update-helper: $*" >&2; exit 2; }
+[ "$(/usr/bin/id -u)" = 0 ] || fail "must run as root"
+[ "$#" -ge 1 ] || fail "expected status, check, stage or apply"
+case "$1" in
+  status|apply)
+    [ "$#" = 1 ] || fail "unexpected arguments"
+    command="$1"
+    set -- "$command"
+    ;;
+  check|stage)
+    [ "$#" = 2 ] || fail "expected stable or nightly"
+    case "$2" in stable|nightly) ;; *) fail "invalid channel";; esac
+    if [ "$1" = stage ]; then
+      set -- update --channel "$2" --progress
+    else
+      set -- check --channel "$2"
+    fi
+    ;;
+  *) fail "unsupported command";;
+esac
+
+# The image owns the updater, trust key, repository and staging paths.
+cd /
+exec /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root \
+  /usr/bin/livi-os-update "$@"
