@@ -49,7 +49,7 @@ for executable in bin/bash usr/bin/stat usr/bin/dbus-run-session usr/bin/pipewir
   usr/libexec/livi-splash-start usr/libexec/livi-splash-stop usr/libexec/livi-os-update-helper \
   usr/libexec/livi-power-helper usr/bin/flock usr/bin/systemctl usr/bin/sudo \
   usr/bin/pipewire-pulse usr/bin/wireplumber usr/bin/jq usr/bin/unsquashfs \
-  usr/bin/pactl usr/bin/xdg-user-dir usr/libexec/livi-projection-helper usr/lib/livi/livi-helperd \
+  usr/bin/pactl usr/bin/xdg-user-dir usr/libexec/livi-helperd usr/bin/pkill usr/bin/pgrep \
   usr/bin/python3 usr/libexec/livi-carpihat-power usr/libexec/livi-can-capture usr/libexec/livi-ssh-hostkey \
   usr/libexec/livi-obd2 \
   usr/local/lib/livi/livi-touch-filter usr/bin/retroarch; do
@@ -70,6 +70,20 @@ if [ "${LIVI_CARPIHAT-1}" = 1 ]; then
   }
 fi
 
+ap_unit="$TARGET/etc/systemd/system/livi-wifi-ap.service"
+for setting in \
+  'Environment=SUDO_USER=livi' \
+  'Requires=livi-data-setup.service' \
+  'After=livi-data-setup.service' \
+  'ExecStartPre=/usr/libexec/livi-helperd --wifi-ap-claim' \
+  'ExecStart=/usr/libexec/livi-helperd --wifi-ap' \
+  'ExecStop=/usr/libexec/livi-helperd --wifi-ap-teardown'; do
+  grep -qx "$setting" "$ap_unit" || {
+    echo "Missing native projection AP setting: $setting" >&2
+    exit 1
+  }
+done
+
 for library in libEGL.so.1 libGLESv2.so.2 libgbm.so.1 libdrm.so.2 \
   libinput.so.10 libseat.so.1 libxkbcommon.so.0 libwayland-client.so.0 \
   libwayland-server.so.0 libgudev-1.0.so.0 libva.so.2; do
@@ -80,7 +94,7 @@ for library in libEGL.so.1 libGLESv2.so.2 libgbm.so.1 libdrm.so.2 \
 done
 
 helper_dynamic="$("${HOST_DIR:?Buildroot host directory missing}/bin/aarch64-linux-readelf" \
-  -d "$TARGET/usr/lib/livi/livi-helperd")"
+  -d "$TARGET/usr/libexec/livi-helperd")"
 if printf '%s\n' "$helper_dynamic" | grep -Eq '\((RPATH|RUNPATH)\)'; then
   echo "Immutable Rust helper must not use a bundled library search path" >&2
   exit 1

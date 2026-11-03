@@ -13,9 +13,9 @@ check_mount /data ext4 rw
 [ -e /data/.livi-data ]
 [ -e /data/.expanded ]
 [ -x /data/livi/app/LIVI.AppImage ] || [ -x /opt/livi-factory/LIVI.AppImage ]
-[ -x /usr/lib/livi/livi-helperd ]
+[ -x /usr/libexec/livi-helperd ]
 [ -x /usr/libexec/livi-kiosk-ready ]
-[ "$(stat -c '%u:%g:%a' /usr/lib/livi/livi-helperd)" = 0:0:755 ]
+[ "$(stat -c '%u:%g:%a' /usr/libexec/livi-helperd)" = 0:0:755 ]
 systemctl is-active --quiet livi-data-setup.service
 if [ -f /etc/ssh/authorized_keys/livi ]; then
   ssh_ready=0

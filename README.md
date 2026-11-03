@@ -338,16 +338,18 @@ The host key is generated on first boot and stored on the writable data partitio
 
 The application supervisor, logger and configuration guard run as `livi`, not
 root, so writable AppImage/configuration paths cannot turn their file operations
-into privileged writes. LIVI can elevate only the fixed projection, CAN capture,
-OS-update and power helpers and the exact `livi-os-slot mark-good` / `boot-failed`
-boot-health commands. The power helper accepts only `poweroff` or `reboot`, refuses
-while an OS update is running, and queues an orderly systemd shutdown/reset.
-The app's System power pages require a confirmation click and report helper
-failures without closing the app. A new OS image is needed to bootstrap this
-helper on older installations. The projection launcher
-validates five explicit arguments, discards the inherited environment, and runs
-the immutable `/usr/lib/livi/livi-helperd` Rust binary without command-line switches.
-There is no writable-helper sudo rule or `SETENV` permission. Helper code changes
+into privileged writes. Native API-2 LIVI starts the immutable
+`/usr/libexec/livi-helperd` with `sudo -n`, no arguments and a command-scoped
+environment allowlist. Only its Wi-Fi teardown switch, exact stale-helper
+cleanup patterns, AP service controls, CAN capture, fixed OBD-II worker,
+OS-update and power helpers, and boot-health commands
+are additionally permitted. Installer switches, arbitrary commands and writable
+helpers are not authorized, and there is no `SETENV` permission.
+The power helper accepts only `poweroff` or `reboot`, refuses while an OS update
+is running, and queues an orderly systemd shutdown/reset. The app's System power
+pages require a confirmation click and report helper failures without closing
+the app. A new OS image is needed to bootstrap this helper on older installations.
+Helper code changes
 require an OS update, independently of writable AppImage updates.
 The OS also installs the factory AppImage's canonical USB allowlist and
 dual-interface touchscreen filter; a writable app update cannot install a new
@@ -356,7 +358,19 @@ udev policy without an OS update.
 The ARM64 AppImage must include the matching launcher integration from the LIVI
 app repository and declare helper API `2` in `resources/livi-os-helper-api`.
 See the [complete Rust app contract](docs/rust-appimage-contract.md), including
-wireless configuration validation, helper lifeline and readiness reporting.
+wireless service integration, helper lifeline and readiness reporting.
+The obsolete five-argument projection wrapper is not the native API-2 interface.
+The payload must also declare display API `1` in
+`resources/livi-os-display-api`. This prevents older helper-compatible nightlies
+that ignore the Waveshare rotation request from being built into this appliance.
+The appliance requests `LIVI_GST_HEVC_LEGACY_SLICE=1` for the pinned 6.12
+HEVC driver. Its slice-length ABI differs from the newer GStreamer backport;
+matching it restored smooth hardware-decoded Android Auto video. The app
+launcher supplies the same default for app-only updates on older images, and
+the media bundle must include the matching compatibility patch.
+Fresh appliance configurations use 140 projection DPI so Android Auto controls
+fit the 1280x400 panel. Change it in Settings > Video > Main Video > DPI;
+existing saved settings are preserved.
 Image creation rejects older payloads; there is no Electron compatibility mode.
 The factory payload is checksum-checked at installation and reinstalled when its
 file/checksum changes during an incremental build.

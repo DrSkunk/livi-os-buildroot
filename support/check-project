@@ -33,7 +33,6 @@ for required in \
   board/drskunk/livi/rootfs-overlay/usr/libexec/livi-power-helper \
   board/drskunk/livi/rootfs-overlay/usr/bin/livi-data-grow \
   support/make-os-update \
-  board/drskunk/livi/rootfs-overlay/usr/libexec/livi-projection-helper \
   board/drskunk/livi/rootfs-overlay/usr/libexec/livi-kiosk-ready \
   board/drskunk/livi/rootfs-overlay/usr/libexec/livi-splash-start \
   board/drskunk/livi/rootfs-overlay/usr/libexec/livi-splash-stop \

@@ -40,13 +40,19 @@ resources/driver/livi-helperd
 ```
 
 Also ship `resources/99-LIVI.rules.template`, `resources/livi-touch-filter`,
+`resources/livi-wifi-ap.service.template`,
 and `resources/livi-os-helper-api` containing `2` followed by a newline.
+Also require `resources/livi-os-display-api` containing `1` followed by a newline.
+This additional capability marker covers DRM rotation, touch and presented-frame
+readiness. API-2 helper compatibility alone is insufficient: older nightlies
+declared API 2 while ignoring the appliance's rotation request. Image builds
+and downloads reject such payloads instead of producing a wrongly oriented image.
 Only advertise API 2 once the behavior below is implemented. AppRun must
 foreground/supervise `livi-core`, propagate shutdown and return failure on
 unrecoverable startup errors. Keep the existing ARM64 AppImage release naming.
 No Rust compiler, Node, pip or distro package installer is needed on the target.
 
-The OS extracts the factory Rust helper to `/usr/lib/livi/livi-helperd`.
+The OS extracts the factory Rust helper to `/usr/libexec/livi-helperd`.
 It must run with system libraries and without a bundled library search path.
 Any required shared libraries must be packaged into the immutable OS.
 An app-only update cannot replace that privileged binary: incompatible helper
@@ -76,6 +82,7 @@ LIVI_MAIN_CONNECTOR=HDMI-A-1
 LIVI_DISPLAY_MODE=400x1280@60
 LIVI_MAIN_TRANSFORM=90
 LIVI_MAIN_SCALE=1
+LIVI_GST_HEVC_LEGACY_SLICE=1
 LIVI_OS_READY_FILE=/run/user/1000/livi-os-ready.json
 LIVI_OS_SESSION_FILE=/run/user/1000/livi-os-session
 ```
@@ -89,6 +96,20 @@ than synthesizing CVT timings. Scan out 400x1280 and rotate to a logical
 Do not silently substitute a desktop-monitor mode or claim readiness on it.
 Keep secondary HDMI outputs disabled unless explicitly configured.
 
+The pinned 6.12 `rpi-hevc-dec` driver interprets HEVC `bit_size` as the end of
+slice data relative to the queued buffer; it subtracts `data_byte_offset`.
+The media bundle's newer GStreamer backport instead uses payload lengths.
+That ABI mismatch produced green video even after correcting capture-layout
+and Wayland stride handling. The bundled V4L2 plugin must honor
+`LIVI_GST_HEVC_LEGACY_SLICE=1` to send the legacy end offset, accounting for
+preceding slices in the queued buffer. Matching this ABI restored smooth
+hardware H.265 Android Auto video on the Pi.
+
+The app's API-2 launcher must set the same flag for app-only updates on older
+images. Desktop launches retain the modern default. Reassess the compatibility
+flag when upgrading the kernel driver. `LIVI_GST_SWDEC=1` remains an explicit
+software fallback and must affect both codec probing and playback.
+
 Use the existing system PipeWire/PulseAudio/WirePlumber services; do not spawn
 duplicates or assume `systemctl --user` units. Keep HOME-backed defaults and
 `XDG_CONFIG_HOME` consistent, and do not attempt runtime apt/pip installation,
@@ -97,36 +118,69 @@ The OS owns those resources. Keep all unprivileged state under `/data`.
 
 ## Privileged projection helper
 
-Under API 2, the core must **not** stage and sudo its writable bundled helper,
-use `sudo -E`, invoke install switches, or use name-based root process killing.
-Use:
+The native application's API-2 contract uses the immutable helper directly,
+not the older five-argument `/usr/libexec/livi-projection-helper` wrapper.
+The core must not stage and sudo its writable bundled helper, use `sudo -E`
+or invoke install switches. Use:
 
 ```
-sudo -n /usr/libexec/livi-projection-helper AA CP PUBLIC_KEY PAIRING_ID DEBUG
+sudo -n /usr/libexec/livi-helperd
+/usr/libexec/livi-helperd --wifi-ap-status
+sudo -n /usr/libexec/livi-helperd --wifi-ap-teardown
 ```
 
-Arguments:
+The core clears its environment and supplies PATH plus these command-scoped
+sudo `env_keep` settings:
 
-- AA, CP, DEBUG: `0` or `1`.
-- PUBLIC_KEY: exactly 64 hexadecimal characters.
-- PAIRING_ID: 1-64 characters, ASCII letters/digits, `:` or `-`.
+```
+LIVI_LIFELINE DEBUG LIVI_AA_WIRELESS LIVI_CP_WIRELESS LIVI_CP_NAME LIVI_CP_FUELS
+LIVI_CP_CONNECTORS LIVI_CP_THEME LIVI_BT_ADAPTER LIVI_MFI_FILES LIVI_WIFI_IFACE
+LIVI_PASSPHRASE LIVI_WIFI_TYPE LIVI_CHANNEL LIVI_COUNTRY LIVI_CP_DEBUG LIVI_CP_DEVICE_ID
+LIVI_CP_PK LIVI_CP_PI LIVI_CP_AIRPLAY_PORT
+```
 
-The wrapper clears the environment, sets `SUDO_USER=livi`, `LIVI_OS=1`,
-`LIVI_OS_API=2`, `LIVI_LIFELINE=1`, and maps the five arguments to
-`LIVI_AA_WIRELESS`, `LIVI_CP_WIRELESS`, `LIVI_CP_PK`, `LIVI_CP_PI`,
-`LIVI_CP_DEBUG`/`DEBUG`. It executes the immutable helper with **no arguments**.
-The helper's stdin stays open for the core lifeline; close it to request shutdown.
-The app must retain that pipe, wait/reap its owned helper, and restart it through
-this same wrapper when settings change.
+The native app also supports these optional developer overrides:
 
-For OS mode the custom helper must obtain additional wireless settings from
-validated configuration, not inherited root environment. Read only the fixed
-`/data/livi/config/LIVI/config.json` path, constrain types/ranges and interface
-names, reject symlinks, never evaluate configuration as commands, and never
-load code/libraries or root installation paths from configuration. Treat the
-file as untrusted input. Report invalid settings explicitly.
-This additional configuration handling is an **AppImage-side requirement**;
-the existing upstream `sudo -E` launch is not compatible.
+```
+LIVI_AP_IP LIVI_PORT LIVI_DONGLE LIVI_CP_WIRED LIVI_AA_USB LIVI_BT_VIA_DONGLE
+LIVI_CHANNEL_WIDTH LIVI_CP_USB_IFACE LIVI_LOCKDOWN_STORE LIVI_CP_MFI_POWER_GPIO
+LIVI_CP_AVAILABLE_CURRENT_MA LIVI_CP_SOURCE_VERSION
+```
+
+Sudo sets `SUDO_USER=livi`. The helper resolves
+`/home/livi/.config/LIVI/config.json`, which the image links to
+`/data/livi/config/LIVI/config.json`. Its stdin stays open with
+`LIVI_LIFELINE=1`; close it to request shutdown. The core retains that pipe,
+waits/reaps its helper and restarts it when settings change. Native stale-process
+cleanup is authorized only for `/usr/bin/pkill -TERM -f /usr/libexec/livi-helperd$`
+and the corresponding `-KILL` invocation, never an arbitrary process pattern.
+
+The image renders the factory AppImage's Wi-Fi AP unit to
+`/etc/systemd/system/livi-wifi-ap.service`, replacing its helper path with
+`/usr/libexec/livi-helperd` and username with `livi`. The unit is not enabled
+by default. It requires and follows `livi-data-setup.service` so persisted
+configuration is mounted before a dedicated AP starts at boot.
+The app may start, stop, restart, enable or disable only this AP unit.
+The service's claim/start/teardown switches run as root through systemd;
+they are not general sudo permissions. The existing persistent, root-owned
+systemd and NetworkManager configuration mounts support these operations.
+
+This replaces the OS's incompatible five-argument launcher contract; an OS
+rebuild is required. Do not repair it with a symlink alone: the environment,
+sudo permissions and Wi-Fi service must match as well. The native helper
+trusts the listed projection settings, including optional file paths; this
+is a different privilege interface from the old argument-validating wrapper.
+
+For an existing Buildroot output tree, force the LIVI package to reinstall
+before generating the new image (use `pi5` instead of `pi4` for Pi 5):
+
+```sh
+make -C buildroot O="$PWD/output/pi4" livi-dirclean
+make pi4
+```
+
+Back up the data partition before reflashing. These source changes do not
+repair an already flashed card or the downloaded image in place.
 
 Native Apple CarPlay remains outside this image's acceptance scope. Do not
 enable it by default or substitute authentication bypasses.

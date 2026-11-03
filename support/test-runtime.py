@@ -24,6 +24,7 @@ SCRIPTS = ROOT / "board/drskunk/livi/rootfs-overlay/usr/bin"
 DISPLAY_DEFAULTS = {
     "projectionWidth": 1280,
     "projectionHeight": 400,
+    "projectionDpi": 140,
     "clusterWidth": 1280,
     "clusterHeight": 400,
 }
@@ -91,60 +92,98 @@ class BootSplash(unittest.TestCase):
 
 
 class ProjectionPrivilegeBoundary(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.path = Path(self.tmp.name)
-        interpreter = self.path / "helperd"
-        interpreter.write_text(
-            '#!/bin/sh\nprintf "args:%s\\n" "$*"\n'
-            'printf "user:%s\\nkey:%s\\npairing:%s\\n" "$SUDO_USER" "$LIVI_CP_PK" "$LIVI_CP_PI"\n'
-            'printf "api:%s:%s:%s\\nflags:%s:%s:%s:%s\\n" "$LIVI_OS" "$LIVI_OS_API" "$LIVI_LIFELINE" "$LIVI_AA_WIRELESS" "$LIVI_CP_WIRELESS" "$LIVI_CP_DEBUG" "$DEBUG"\n'
-            'printf "injected:%s:%s:%s\\n" "${PYTHONPATH-unset}" "${LD_PRELOAD-unset}" "${BASH_ENV-unset}"\n'
-        )
-        interpreter.chmod(0o755)
-        script = (SCRIPTS.parent / "libexec/livi-projection-helper").read_text()
-        script = (script.replace('$(/usr/bin/id -u)', "0")
-                  .replace("/usr/lib/livi/livi-helperd", str(interpreter)))
-        self.script = self.path / "launcher"
-        self.script.write_text(script)
-        self.key = "ab" * 32
+    RULES = ROOT / "board/drskunk/livi/rootfs-overlay/etc/sudoers.d/99-livi"
 
-    def launch(self, *args):
-        return subprocess.run(
-            ["sh", str(self.script), *args], capture_output=True, text=True,
-            env={**os.environ, "PYTHONPATH": "/untrusted", "BASH_ENV": "/untrusted",
-                 "SUDO_USER": "attacker"},
-        )
+    def alias(self, name):
+        prefix = f"Cmnd_Alias {name} = "
+        return next(line.removeprefix(prefix).split(", ") for line in
+                    self.RULES.read_text().splitlines() if line.startswith(prefix))
 
-    def test_only_validated_arguments_reach_immutable_rust_helper(self):
-        result = self.launch("1", "0", self.key, "pairing-123", "0")
+    def test_native_helper_only_allows_daemon_and_teardown(self):
+        self.assertEqual(self.alias("LIVI_HELPER"), [
+            '/usr/libexec/livi-helperd ""',
+            '/usr/libexec/livi-helperd --wifi-ap-teardown',
+        ])
+        self.assertIn("NOPASSWD: NOSETENV: LIVI_HELPER", self.RULES.read_text())
+
+    def test_stale_cleanup_only_targets_the_immutable_helper(self):
+        self.assertEqual(self.alias("LIVI_STALE"), [
+            "/usr/bin/pkill -TERM -f /usr/libexec/livi-helperd$",
+            "/usr/bin/pkill -KILL -f /usr/libexec/livi-helperd$",
+        ])
+
+    def test_wireless_controls_only_target_the_ap_unit(self):
+        self.assertEqual(self.alias("LIVI_WIFI_AP"), [
+            f"/usr/bin/systemctl {action} livi-wifi-ap.service"
+            for action in ("start", "stop", "restart", "enable", "disable")
+        ])
+
+    def test_helper_environment_is_command_scoped_and_excludes_code_loading(self):
+        lines = [line for line in self.RULES.read_text().splitlines()
+                 if "env_keep" in line]
+        self.assertEqual(len(lines), 2)
+        keys = set()
+        for line in lines:
+            self.assertTrue(line.startswith(
+                'Defaults!/usr/libexec/livi-helperd env_keep += "'))
+            keys.update(line.split('"')[1].split())
+        self.assertTrue({"LIVI_LIFELINE", "LIVI_AA_WIRELESS", "LIVI_CP_WIRELESS",
+                         "LIVI_CP_PK", "LIVI_CP_PI", "LIVI_CP_DEVICE_ID",
+                         "LIVI_CP_AIRPLAY_PORT", "LIVI_WIFI_IFACE",
+                         "LIVI_PASSPHRASE", "DEBUG"} <= keys)
+        self.assertFalse({"LD_PRELOAD", "LD_LIBRARY_PATH", "PYTHONPATH", "BASH_ENV",
+                          "PATH", "HOME", "SUDO_USER"} & keys)
+        doc = (ROOT / "docs/rust-appimage-contract.md").read_text()
+        for key in keys:
+            self.assertIn(key, doc)
+
+    def test_packaging_and_boot_checks_use_the_native_helper_path(self):
+        for relative in ("package/livi/livi.mk", "board/drskunk/livi/post-build.sh",
+                         "board/drskunk/livi/post-fakeroot.sh",
+                         "board/drskunk/livi/rootfs-overlay/usr/libexec/livi-qemu-check"):
+            self.assertIn("usr/libexec/livi-helperd", (ROOT / relative).read_text())
+        package = (ROOT / "package/livi/livi.mk").read_text()
+        self.assertIn("resources/livi-wifi-ap.service.template", package)
+        self.assertIn("s/__USERNAME__/livi/g", package)
+        self.assertIn("chmod 0644", package)
+
+    def test_wireless_unit_rendering_preserves_commands_and_waits_for_data(self):
+        source = (ROOT / "package/livi/livi.mk").read_text()
+        start = source.index("\tsed -e 's|/usr/local/sbin/livi-helperd|")
+        end = source.index("\n\tchmod 0644", start)
+        render = source[start:end]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            template = path / "factory/resources/livi-wifi-ap.service.template"
+            template.parent.mkdir(parents=True)
+            template.write_text(
+                "[Unit]\nAfter=network.target\n"
+                "ConditionPathExists=/usr/local/sbin/livi-helperd\n"
+                "[Service]\nEnvironment=SUDO_USER=__USERNAME__\n"
+                "ExecStartPre=/usr/local/sbin/livi-helperd --wifi-ap-claim\n"
+                "ExecStart=/usr/local/sbin/livi-helperd --wifi-ap\n"
+                "ExecStop=/usr/local/sbin/livi-helperd --wifi-ap-teardown\n"
+            )
+            target = path / "target/etc/systemd/system"
+            target.mkdir(parents=True)
+            render = (render.replace("$(@D)", str(path))
+                      .replace("$(TARGET_DIR)", str(path / "target")).replace("$$", "$"))
+            result = subprocess.run(["sh", "-c", render], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            rendered = (target / "livi-wifi-ap.service").read_text()
+            self.assertNotIn("__USERNAME__", rendered)
+            self.assertNotIn("/usr/local/sbin", rendered)
+            for setting in ("Environment=SUDO_USER=livi",
+                            "Requires=livi-data-setup.service",
+                            "After=livi-data-setup.service",
+                            "ExecStart=/usr/libexec/livi-helperd --wifi-ap"):
+                self.assertIn(setting, rendered)
+
+    @unittest.skipUnless(Path("/usr/sbin/visudo").exists(), "visudo is not installed")
+    def test_sudoers_syntax(self):
+        result = subprocess.run(
+            ["/usr/sbin/visudo", "-cf", str(self.RULES)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("args:\n", result.stdout)
-        self.assertIn("user:livi", result.stdout)
-        self.assertIn("api:1:2:1", result.stdout)
-        self.assertIn("flags:1:0:0:0", result.stdout)
-        self.assertIn(f"key:{self.key}", result.stdout)
-        self.assertIn("pairing:pairing-123", result.stdout)
-        self.assertIn("injected:unset:unset:unset", result.stdout)
-
-    def test_rejects_extra_interpreter_arguments(self):
-        self.assertNotEqual(self.launch("1", "0", self.key, "id", "0", "-c").returncode, 0)
-
-    def test_rejects_invalid_wireless_flags(self):
-        self.assertNotEqual(self.launch("yes", "0", self.key, "id", "0").returncode, 0)
-
-    def test_rejects_invalid_public_key(self):
-        for key in ("", "ab", "g" * 64):
-            with self.subTest(key=key):
-                self.assertNotEqual(self.launch("1", "0", key, "id", "0").returncode, 0)
-
-    def test_rejects_pairing_id_with_control_characters(self):
-        self.assertNotEqual(self.launch("1", "0", self.key, "id\nPATH=/tmp", "0").returncode, 0)
-
-    def test_rejects_installer_switch_and_oversized_pairing_id(self):
-        self.assertNotEqual(self.launch("--install-udev-rule").returncode, 0)
-        self.assertNotEqual(self.launch("1", "0", self.key, "x" * 65, "0").returncode, 0)
 
 
 class PowerPrivilegeBoundary(unittest.TestCase):
@@ -268,6 +307,7 @@ class RustPayload(unittest.TestCase):
             path.chmod(0o755)
         for relative in self.module["RESOURCES"]:
             (self.path / relative).write_text("2\n")
+        (self.path / "resources/livi-os-display-api").write_text("1\n")
 
     def check(self):
         self.module["check"](self.path)
@@ -280,6 +320,21 @@ class RustPayload(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.check()
 
+    def test_api2_without_appliance_display_support_is_rejected(self):
+        display = self.path / "resources/livi-os-display-api"
+        display.unlink()
+        with self.assertRaisesRegex(ValueError, "livi-os-display-api"):
+            self.check()
+        display.write_text("0\n")
+        with self.assertRaisesRegex(ValueError, "display API 1"):
+            self.check()
+
+    def test_appliance_requests_the_fixed_panel_rotation_without_saved_config(self):
+        source = (SCRIPTS / "livi-supervisor").read_text()
+        for setting in ("LIVI_MAIN_CONNECTOR=HDMI-A-1", "LIVI_DISPLAY_MODE=400x1280@60",
+                        "LIVI_MAIN_TRANSFORM=90", "LIVI_MAIN_SCALE=1"):
+            self.assertIn(setting, source)
+
     def test_missing_or_nonexecutable_binary_is_rejected(self):
         path = self.path / "livi-ui"
         path.chmod(0o644)
@@ -287,6 +342,11 @@ class RustPayload(unittest.TestCase):
             self.check()
         path.unlink()
         with self.assertRaises(ValueError):
+            self.check()
+
+    def test_missing_wireless_service_template_is_rejected(self):
+        (self.path / "resources/livi-wifi-ap.service.template").unlink()
+        with self.assertRaisesRegex(ValueError, "livi-wifi-ap.service.template"):
             self.check()
 
     def test_x64_binary_is_rejected(self):
@@ -906,7 +966,7 @@ dbus-run-session() {
   echo session > "$TEST_DIR/session"
   test "$1" = --
   shift
-  printf '%s\\n' "$HOME" "$XKB_CONFIG_ROOT" "$LIVI_COMPOSITOR_BACKEND" "$LIVI_MAIN_TRANSFORM" "$*" > "$TEST_DIR/environment"
+  printf '%s\\n' "$HOME" "$XKB_CONFIG_ROOT" "$LIVI_COMPOSITOR_BACKEND" "$LIVI_MAIN_TRANSFORM" "$LIVI_GST_HEVC_LEGACY_SLICE" "$*" > "$TEST_DIR/environment"
 }
 '''
             subprocess.run(
@@ -917,7 +977,7 @@ dbus-run-session() {
             self.assertTrue((path / "session").exists())
             self.assertEqual(
                 (path / "environment").read_text().splitlines(),
-                ["/data/livi/home", "/usr/share/X11/xkb", "drm", "90", "/test/LIVI.AppImage"],
+                ["/data/livi/home", "/usr/share/X11/xkb", "drm", "90", "1", "/test/LIVI.AppImage"],
             )
 
 
@@ -1392,7 +1452,7 @@ class CarPiHATPostBuild(unittest.TestCase):
             "usr/bin/psplash", "usr/bin/psplash-write", "usr/bin/timeout",
             "usr/bin/pipewire-pulse", "usr/bin/wireplumber", "usr/bin/jq",
             "usr/bin/unsquashfs", "usr/bin/pactl", "usr/bin/xdg-user-dir",
-            "usr/lib/livi/livi-helperd", "usr/bin/python3",
+            "usr/libexec/livi-helperd", "usr/bin/python3", "usr/bin/pkill", "usr/bin/pgrep",
             "usr/bin/flock", "usr/bin/systemctl", "usr/bin/sudo",
             "usr/local/lib/livi/livi-touch-filter", "usr/bin/retroarch",
         ):
@@ -1418,9 +1478,18 @@ class CarPiHATPostBuild(unittest.TestCase):
             "libva.so.2",
         ):
             (self.target / "usr/lib" / name).touch()
+        (self.target / "usr/lib/livi").mkdir(parents=True, exist_ok=True)
         (self.target / "usr/lib/livi/LIVI.AppImage").write_bytes(b"fixture")
         (self.target / "usr/lib/livi/factory-appimage.sha256").write_text(
             hashlib.sha256(b"fixture").hexdigest() + "  usr/lib/livi/LIVI.AppImage\n")
+        (self.target / "etc/systemd/system").mkdir(parents=True, exist_ok=True)
+        (self.target / "etc/systemd/system/livi-wifi-ap.service").write_text(
+            "[Unit]\nRequires=livi-data-setup.service\nAfter=livi-data-setup.service\n"
+            "[Service]\nEnvironment=SUDO_USER=livi\n"
+            "ExecStartPre=/usr/libexec/livi-helperd --wifi-ap-claim\n"
+            "ExecStart=/usr/libexec/livi-helperd --wifi-ap\n"
+            "ExecStop=/usr/libexec/livi-helperd --wifi-ap-teardown\n"
+        )
         self.binding = self.target / "usr/lib/python3.14/site-packages/gpiod.so"
         self.binding.parent.mkdir(parents=True)
         self.binding.touch()
