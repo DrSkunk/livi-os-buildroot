@@ -8,14 +8,13 @@ ssh_service="$TARGET/etc/systemd/system/multi-user.target.wants/livi-ssh.service
 default_ssh_service="$TARGET/etc/systemd/system/multi-user.target.wants/sshd.service"
 ssh_keys_dir="$TARGET/etc/ssh/authorized_keys"
 
-for executable in usr/lib/livi/livi-helperd usr/libexec/livi-projection-helper; do
-  [ -f "$TARGET/$executable" ] && [ ! -L "$TARGET/$executable" ] || {
-    echo "Missing regular immutable Rust helper: /$executable" >&2
-    exit 1
-  }
-  chown 0:0 "$TARGET/$executable"
-  chmod 0755 "$TARGET/$executable"
-done
+helper="$TARGET/usr/libexec/livi-helperd"
+[ -f "$helper" ] && [ ! -L "$helper" ] || {
+  echo "Missing regular immutable Rust helper: /usr/libexec/livi-helperd" >&2
+  exit 1
+}
+chown 0:0 "$helper"
+chmod 0755 "$helper"
 
 rm -f "$ssh_service" "$default_ssh_service" "$ssh_keys_dir/livi"
 [ -f "$ssh_authorized_keys" ] || exit 0

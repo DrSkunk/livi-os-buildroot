@@ -333,11 +333,12 @@ The host key is generated on first boot and stored on the writable data partitio
 
 The application supervisor, logger and configuration guard run as `livi`, not
 root, so writable AppImage/configuration paths cannot turn their file operations
-into privileged writes. LIVI can elevate only `/usr/libexec/livi-projection-helper`
-and the exact `livi-os-slot mark-good` / `boot-failed` boot-health commands. The launcher
-validates five explicit arguments, discards the inherited environment, and runs
-the immutable `/usr/lib/livi/livi-helperd` Rust binary without command-line switches.
-There is no writable-helper sudo rule or `SETENV` permission. Helper code changes
+into privileged writes. Native API-2 LIVI starts the immutable
+`/usr/libexec/livi-helperd` with `sudo -n`, no arguments and a command-scoped
+environment allowlist. Only its Wi-Fi teardown switch, exact stale-helper
+cleanup patterns, AP service controls, CAN capture and boot-health commands
+are additionally permitted. Installer switches, arbitrary commands and writable
+helpers are not authorized, and there is no `SETENV` permission. Helper code changes
 require an OS update, independently of writable AppImage updates.
 The OS also installs the factory AppImage's canonical USB allowlist and
 dual-interface touchscreen filter; a writable app update cannot install a new
@@ -346,7 +347,8 @@ udev policy without an OS update.
 The ARM64 AppImage must include the matching launcher integration from the LIVI
 app repository and declare helper API `2` in `resources/livi-os-helper-api`.
 See the [complete Rust app contract](docs/rust-appimage-contract.md), including
-wireless configuration validation, helper lifeline and readiness reporting.
+wireless service integration, helper lifeline and readiness reporting.
+The obsolete five-argument projection wrapper is not the native API-2 interface.
 Image creation rejects older payloads; there is no Electron compatibility mode.
 The factory payload is checksum-checked at installation and reinstalled when its
 file/checksum changes during an incremental build.

@@ -12,7 +12,7 @@ BINARIES = ("livi-ui", "resources/core/livi-core",
             "resources/compositor/livi-compositor", "resources/gst-host/livi-gst-host",
             "resources/driver/livi-helperd")
 RESOURCES = ("resources/livi-os-helper-api", "resources/99-LIVI.rules.template",
-             "resources/livi-touch-filter")
+             "resources/livi-touch-filter", "resources/livi-wifi-ap.service.template")
 
 
 def regular_file(root, relative):
