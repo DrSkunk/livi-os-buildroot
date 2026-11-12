@@ -123,6 +123,37 @@ libssh and the Vulkan loader even when decoding H.264 or H.265 in software.
 Both images include these runtime libraries; they do not imply VA-API or
 Vulkan hardware decoding support, and the kiosk continues to use Wayland.
 
+## Local music
+
+With the matching Local Music AppImage, open **Media → Local Music** to browse
+folders and relative M3U/M3U8 playlists using the existing playback controls.
+Put internal music in `/data/livi/music`, or insert a FAT32/exFAT USB stick.
+The OS mounts music volumes read-only at `/run/livi-media/<device>` and never
+copies or modifies their files. Refresh the library after inserting a drive.
+Only the selected folder's tracks or selected playlist are queued.
+
+USB volumes containing `livi-update/livi-os-rpi4-update.json` or
+`livi-update/livi-os-rpi5-update.json` are reserved for the signed updater,
+not the music library. The updater still verifies signatures before accepting
+an update. ext4 sticks remain supported for OS updates, not portable music.
+Never use an update stick as a music/sync destination. The USB media mount
+helper and narrow safe-eject command require an OS update; installing only
+the AppImage does not add mounting support.
+
+The matching app can also transfer music to internal storage from the
+[LIVI Music](https://drskunk.github.io/livi-music/) website over an explicitly
+paired and approved WebRTC session. Signaling uses the public PeerJS Cloud
+service, so the device needs internet access; the OS installs no server. Open
+the link LIVI shows, enter its pairing code, and approve only if both screens
+show the same verification code. Optional ICE/TURN settings live in
+`/data/livi/config/LIVI/music-sync.json`; see the app README's
+**Wireless music transfer** section for details and transfer limits.
+USB volumes are not writable destinations. Interrupted internal transfers may
+leave partial files under `/data/livi/.livi-music-transfer`.
+
+Physical USB audio playback, phone interruption/resume and surprise removal
+still need Pi hardware acceptance; host tests do not establish that acceptance.
+
 ## Host requirements
 
 An x86-64 Linux build host (required by the prebuilt Bootlin toolchain) with Git, GNU Make, GCC, Python 3.11+, `curl`, `readelf`, `unsquashfs`, and normal

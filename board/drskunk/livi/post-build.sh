@@ -48,6 +48,8 @@ for executable in bin/bash usr/bin/stat usr/bin/dbus-run-session usr/bin/pipewir
   usr/bin/psplash usr/bin/psplash-write usr/bin/timeout \
   usr/libexec/livi-splash-start usr/libexec/livi-splash-stop usr/libexec/livi-os-update-helper \
   usr/libexec/livi-power-helper usr/bin/flock usr/bin/systemctl usr/bin/sudo \
+  usr/libexec/livi-media-storage usr/libexec/livi-media-eject \
+  bin/mount bin/umount \
   usr/bin/pipewire-pulse usr/bin/wireplumber usr/bin/jq usr/bin/unsquashfs \
   usr/bin/pactl usr/bin/xdg-user-dir usr/libexec/livi-helperd usr/bin/pkill usr/bin/pgrep \
   usr/bin/python3 usr/libexec/livi-carpihat-power usr/libexec/livi-can-capture usr/libexec/livi-ssh-hostkey \

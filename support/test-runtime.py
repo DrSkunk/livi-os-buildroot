@@ -30,6 +30,185 @@ DISPLAY_DEFAULTS = {
 }
 
 
+class RemovableMediaStorage(unittest.TestCase):
+    STORAGE = ROOT / "board/drskunk/livi/rootfs-overlay/usr/libexec/livi-media-storage"
+    EJECT = ROOT / "board/drskunk/livi/rootfs-overlay/usr/libexec/livi-media-eject"
+    UDEV = ROOT / "board/drskunk/livi/rootfs-overlay/usr/lib/udev/rules.d/90-livi-os-update.rules"
+    UNITS = ROOT / "board/drskunk/livi/rootfs-overlay/usr/lib/systemd/system"
+
+    def storage(self):
+        return runpy.run_path(str(self.STORAGE))
+
+    def test_device_names_and_mount_arguments_are_restricted(self):
+        storage = self.storage()
+        self.assertTrue(storage["valid_device_name"]("sda1"))
+        self.assertTrue(storage["valid_device_name"]("mmcblk0p1"))
+        for name in ("", "../sda1", "sda1;id", "sda1 other"):
+            self.assertFalse(storage["valid_device_name"](name))
+
+        for filesystem in ("vfat", "exfat"):
+            arguments = storage["mount_arguments"](
+                Path("/dev/sda1"), Path("/run/livi-media/sda1"), filesystem)
+            self.assertEqual(arguments[2], filesystem)
+            self.assertEqual(arguments[4],
+                             "ro,nosuid,nodev,noexec,uid=1000,gid=1000,umask=0022"
+                             + (",utf8" if filesystem == "vfat" else ""))
+        self.assertEqual(
+            storage["mount_arguments"](
+                Path("/dev/sda1"), Path("/run/probe"), "ext4")[4],
+            "ro,nosuid,nodev,noexec,noload")
+        with self.assertRaises(SystemExit):
+            storage["mount_arguments"](Path("/dev/sda1"), Path("/run/probe"), "ntfs")
+
+    def test_dispatch_reserves_signed_update_volumes(self):
+        storage = self.storage()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.assertEqual(storage["classify_volume"](root, "exfat"), "media")
+            (root / "livi-update").mkdir()
+            manifest = root / "livi-update/livi-os-rpi5-update.json"
+            manifest.write_text("{}")
+            self.assertEqual(storage["classify_volume"](root, "exfat"), "update")
+            manifest.unlink()
+            self.assertIsNone(storage["classify_volume"](root, "ext4"))
+
+    def test_device_removal_unmounts_even_after_the_device_node_disappears(self):
+        storage = self.storage()
+        runtime = storage["unmount_media"].__globals__
+        commands = []
+        with tempfile.TemporaryDirectory() as directory:
+            runtime["MEDIA_ROOT"] = Path(directory) / "media"
+            mountpoint = runtime["MEDIA_ROOT"] / "sda1"
+            mountpoint.mkdir(parents=True)
+            runtime["mounted_source"] = lambda target: "/dev/sda1"
+            runtime["run"] = lambda command: (
+                commands.append(command) or subprocess.CompletedProcess(command, 0, "", ""))
+            storage["unmount_media"]("sda1")
+            self.assertEqual(commands, [[runtime["UMOUNT"], str(mountpoint)]])
+            self.assertFalse(mountpoint.exists())
+
+    def test_device_validation_rejects_non_usb_storage(self):
+        storage = self.storage()
+        runtime = storage["device_path"].__globals__
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime["DEVICE_ROOT"] = root / "dev"
+            runtime["SYS_BLOCK"] = root / "sys/class/block"
+            runtime["DEVICE_ROOT"].mkdir()
+            runtime["SYS_BLOCK"].mkdir(parents=True)
+            (runtime["DEVICE_ROOT"] / "sda1").touch()
+            partition = root / "devices/usb/block/sda/sda1"
+            partition.mkdir(parents=True)
+            (runtime["SYS_BLOCK"] / "sda1").symlink_to(partition)
+            with mock.patch.object(storage["stat"], "S_ISBLK", return_value=True):
+                with self.assertRaises(SystemExit):
+                    storage["device_path"]("sda1")
+                usb = root / "bus/usb"
+                usb.mkdir(parents=True)
+                (root / "devices/usb/subsystem").symlink_to(usb)
+                self.assertEqual(storage["device_path"]("sda1"),
+                                 runtime["DEVICE_ROOT"] / "sda1")
+
+    def test_dispatch_unmounts_probe_before_starting_one_handler(self):
+        for update in (False, True):
+            with self.subTest(update=update), tempfile.TemporaryDirectory() as directory:
+                storage = self.storage()
+                runtime = storage["dispatch"].__globals__
+                root = Path(directory)
+                runtime["PROBE_ROOT"] = root / "probe"
+                runtime["DISPATCH_LOCK"] = root / "dispatch.lock"
+                runtime["MEDIA_ROOT"] = root / "media"
+                runtime["device_path"] = lambda name: Path("/dev") / name
+                runtime["mounted_source"] = lambda path: None
+                commands = []
+
+                def mount(device, target, filesystems):
+                    target.mkdir()
+                    if update:
+                        (target / "livi-update").mkdir()
+                        (target / "livi-update/livi-os-rpi4-update.json").write_text("{}")
+                    return "exfat"
+
+                def unmount(target):
+                    commands.append(("unmount", target))
+
+                runtime["mount_volume"] = mount
+                runtime["unmount_volume"] = unmount
+                runtime["run"] = lambda command: (
+                    commands.append(command) or subprocess.CompletedProcess(command, 0, "", ""))
+                storage["dispatch"]("sda1")
+                self.assertEqual(commands[0], ("unmount", runtime["PROBE_ROOT"]))
+                unit = "livi-os-usb@sda1.service" if update else "livi-media@sda1.service"
+                self.assertEqual(commands[1],
+                                 [runtime["SYSTEMCTL"], "--no-block", "start", unit])
+
+    def test_busy_mount_is_not_force_detached_or_removed(self):
+        storage = self.storage()
+        runtime = storage["unmount_volume"].__globals__
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "sda1"
+            target.mkdir()
+            runtime["mounted_source"] = lambda path: "/dev/sda1"
+            runtime["run"] = lambda command: subprocess.CompletedProcess(
+                command, 32, "", "target is busy")
+            with self.assertRaises(SystemExit):
+                storage["unmount_volume"](target)
+            self.assertTrue(target.is_dir())
+
+    def test_eject_retries_an_unmount_after_a_busy_service_stop(self):
+        eject = runpy.run_path(str(self.EJECT))
+        runtime = eject["main"].__globals__
+        commands = []
+        storage = {
+            "valid_device_name": lambda name: name == "sda1",
+            "device_path": lambda name: Path("/dev") / name,
+            "unmount_media": lambda name: commands.append(("unmount", name)),
+        }
+        with mock.patch.object(eject["runpy"], "run_path", return_value=storage), \
+                mock.patch.object(eject["subprocess"], "run", side_effect=lambda command, **kw: (
+                    commands.append(command) or subprocess.CompletedProcess(command, 0, "", ""))), \
+                mock.patch.object(eject["os"].path, "ismount", side_effect=[True, False]):
+            eject["main"](["sda1"])
+        self.assertEqual(commands, [
+            [runtime["SYSTEMCTL"], "stop", "livi-media@sda1.service"],
+            ("unmount", "sda1"),
+        ])
+
+    def test_mount_failure_removes_only_the_empty_mount_directory(self):
+        storage = self.storage()
+        runtime = storage["mount_volume"].__globals__
+        commands = []
+        runtime["mounted_source"] = lambda path: None
+        runtime["run"] = lambda command: (
+            commands.append(command) or subprocess.CompletedProcess(command, 32, "", "bad filesystem"))
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "media/sda1"
+            with self.assertRaises(SystemExit):
+                storage["mount_volume"](Path("/dev/sda1"), target, ("vfat", "exfat"))
+            self.assertFalse(target.exists())
+            self.assertEqual([command[2] for command in commands], ["vfat", "exfat"])
+
+    def test_single_udev_dispatcher_selects_noncompeting_units(self):
+        rule = self.UDEV.read_text()
+        self.assertIn('livi-usb-dispatch@%k.service', rule)
+        self.assertNotIn('livi-media@%k.service', rule)
+        self.assertNotIn('livi-os-usb@%k.service', rule)
+        dispatcher = (self.UNITS / "livi-usb-dispatch@.service").read_text()
+        self.assertIn("livi-media-storage dispatch %i", dispatcher)
+        media = (self.UNITS / "livi-media@.service").read_text()
+        self.assertIn("BindsTo=dev-%i.device", media)
+        self.assertIn("ExecStop=/usr/libexec/livi-media-storage unmount %i", media)
+
+    def test_eject_is_the_only_sudo_media_operation(self):
+        sudoers = (ROOT / "board/drskunk/livi/rootfs-overlay/etc/sudoers.d/99-livi").read_text()
+        self.assertIn("Cmnd_Alias LIVI_MEDIA_EJECT = /usr/libexec/livi-media-eject", sudoers)
+        self.assertIn("livi ALL=(root) NOPASSWD: NOSETENV: LIVI_MEDIA_EJECT", sudoers)
+        source = self.EJECT.read_text()
+        self.assertIn('storage["device_path"](name)', source)
+        self.assertIn('f"livi-media@{name}.service"', source)
+        self.assertNotIn("umount -l", source)
+
+
 class BootSplash(unittest.TestCase):
     def run_start(self, framebuffer):
         source = (SCRIPTS.parent / "libexec/livi-splash-start").read_text()
@@ -1448,7 +1627,8 @@ class CarPiHATPostBuild(unittest.TestCase):
         shutil.copytree(ROOT / "board/drskunk/livi/rootfs-overlay", self.target,
                         symlinks=True)
         for name in (
-            "bin/bash", "usr/bin/stat", "usr/bin/dbus-run-session", "usr/bin/pipewire",
+            "bin/bash", "bin/mount", "bin/umount",
+            "usr/bin/stat", "usr/bin/dbus-run-session", "usr/bin/pipewire",
             "usr/bin/psplash", "usr/bin/psplash-write", "usr/bin/timeout",
             "usr/bin/pipewire-pulse", "usr/bin/wireplumber", "usr/bin/jq",
             "usr/bin/unsquashfs", "usr/bin/pactl", "usr/bin/xdg-user-dir",

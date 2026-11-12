@@ -14,3 +14,5 @@ Cmnd_Alias LIVI_OS_UPDATE = /usr/libexec/livi-os-update-helper
 livi ALL=(root) NOPASSWD: NOSETENV: LIVI_OS_UPDATE
 Cmnd_Alias LIVI_POWER = /usr/libexec/livi-power-helper poweroff, /usr/libexec/livi-power-helper reboot
 livi ALL=(root) NOPASSWD: NOSETENV: LIVI_POWER
+Cmnd_Alias LIVI_MEDIA_EJECT = /usr/libexec/livi-media-eject
+livi ALL=(root) NOPASSWD: NOSETENV: LIVI_MEDIA_EJECT
