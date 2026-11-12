@@ -1,0 +1,12 @@
+[Unit]
+Description=Mount read-only LIVI music media from USB partition %I
+BindsTo=dev-%i.device
+After=dev-%i.device
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/livi-media-storage mount %i
+ExecStop=/usr/libexec/livi-media-storage unmount %i
+TimeoutStartSec=30
+TimeoutStopSec=15

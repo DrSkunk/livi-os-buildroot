@@ -1,3 +1,3 @@
-# Offer USB filesystems to the signed OS updater. Sticks without a
-# livi-update/livi-os-BOARD-update.json are mounted read-only and ignored.
-ACTION=="add", SUBSYSTEM=="block", ENV{ID_BUS}=="usb", ENV{ID_FS_TYPE}=="vfat|exfat|ext4", TAG+="systemd", ENV{SYSTEMD_WANTS}+="livi-os-usb@%k.service"
+# Probe each supported USB partition once, then route it either to the signed
+# updater or to the read-only music library (never both).
+ACTION=="add", SUBSYSTEM=="block", ENV{ID_BUS}=="usb", ENV{ID_FS_TYPE}=="vfat|exfat|ext4", TAG+="systemd", ENV{SYSTEMD_WANTS}+="livi-usb-dispatch@%k.service"

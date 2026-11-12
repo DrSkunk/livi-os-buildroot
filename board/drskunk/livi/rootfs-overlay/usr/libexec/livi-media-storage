@@ -1,0 +1,187 @@
+#!/usr/bin/python3
+
+import fcntl
+import re
+import stat
+import subprocess
+import sys
+from pathlib import Path
+
+MEDIA_ROOT = Path("/run/livi-media")
+PROBE_ROOT = Path("/run/livi-usb-probe")
+DISPATCH_LOCK = Path("/run/livi-usb-dispatch.lock")
+DEVICE_ROOT = Path("/dev")
+SYS_BLOCK = Path("/sys/class/block")
+MOUNT = "/bin/mount"
+UMOUNT = "/bin/umount"
+SYSTEMCTL = "/usr/bin/systemctl"
+FILESYSTEMS = ("vfat", "exfat", "ext4")
+MEDIA_FILESYSTEMS = ("vfat", "exfat")
+
+
+def fail(message):
+    print(f"livi-media-storage: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def valid_device_name(name):
+    return bool(re.fullmatch(r"[A-Za-z0-9]+", name))
+
+
+def device_path(name):
+    if not valid_device_name(name):
+        fail(f"invalid block device name: {name}")
+    path = DEVICE_ROOT / name
+    try:
+        mode = path.stat().st_mode
+    except OSError as error:
+        fail(f"cannot access {path}: {error}")
+    if not stat.S_ISBLK(mode):
+        fail(f"{path} is not a block device")
+    sys_device = (SYS_BLOCK / name).resolve(strict=True)
+    if not any((parent / "subsystem").resolve().name == "usb"
+               for parent in (sys_device, *sys_device.parents)):
+        fail(f"{path} is not USB storage")
+    return path
+
+
+def ensure_directory(path):
+    if path.is_symlink():
+        fail(f"refusing symlink mount directory: {path}")
+    path.mkdir(mode=0o755, parents=True, exist_ok=True)
+    if not path.is_dir():
+        fail(f"mount path is not a directory: {path}")
+
+
+def mounted_source(target):
+    escaped_target = str(target).replace(" ", r"\040").replace("\t", r"\011")
+    with open("/proc/mounts", encoding="utf-8") as mounts:
+        for line in mounts:
+            fields = line.split()
+            if len(fields) >= 2 and fields[1] == escaped_target:
+                return fields[0].replace(r"\040", " ").replace(r"\011", "\t")
+    return None
+
+
+def run(command):
+    try:
+        return subprocess.run(command, check=False, text=True, capture_output=True)
+    except OSError as error:
+        fail(f"cannot run {command[0]}: {error}")
+
+
+def mount_arguments(device, target, filesystem):
+    if filesystem not in FILESYSTEMS:
+        fail(f"unsupported filesystem: {filesystem}")
+    options = ["ro", "nosuid", "nodev", "noexec"]
+    if filesystem in MEDIA_FILESYSTEMS:
+        options.extend(["uid=1000", "gid=1000", "umask=0022"])
+        if filesystem == "vfat":
+            options.append("utf8")
+    elif filesystem == "ext4":
+        options.append("noload")
+    return [MOUNT, "-t", filesystem, "-o", ",".join(options), str(device), str(target)]
+
+
+def mount_volume(device, target, filesystems):
+    ensure_directory(target.parent)
+    ensure_directory(target)
+    existing = mounted_source(target)
+    if existing is not None:
+        if existing == str(device):
+            return filesystems[0]
+        fail(f"{target} is already mounted from {existing}")
+    errors = []
+    for filesystem in filesystems:
+        result = run(mount_arguments(device, target, filesystem))
+        if result.returncode == 0:
+            return filesystem
+        errors.append(result.stderr.strip() or f"mount as {filesystem} failed")
+    target.rmdir()
+    fail("; ".join(errors))
+
+
+def unmount_volume(target):
+    if target.is_symlink():
+        fail(f"refusing symlink mount directory: {target}")
+    source = mounted_source(target)
+    if source is not None:
+        result = run([UMOUNT, str(target)])
+        if result.returncode != 0:
+            fail(result.stderr.strip() or f"cannot unmount {target}")
+    if target.exists():
+        try:
+            target.rmdir()
+        except OSError as error:
+            fail(f"cannot remove mount directory {target}: {error}")
+
+
+def has_update_manifest(root):
+    update_root = root / "livi-update"
+    if update_root.is_symlink() or not update_root.is_dir():
+        return False
+    for board in ("rpi4", "rpi5"):
+        manifest = update_root / f"livi-os-{board}-update.json"
+        if not manifest.is_symlink() and manifest.is_file():
+            return True
+    return False
+
+
+def classify_volume(root, filesystem):
+    if has_update_manifest(root):
+        return "update"
+    if filesystem in MEDIA_FILESYSTEMS:
+        return "media"
+    return None
+
+
+def dispatch(name):
+    device = device_path(name)
+    ensure_directory(PROBE_ROOT.parent)
+    with open(DISPATCH_LOCK, "a", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if mounted_source(MEDIA_ROOT / name) == str(device):
+            print(f"livi-media-storage: {device} is already available for music")
+            return
+        filesystem = mount_volume(device, PROBE_ROOT, FILESYSTEMS)
+        try:
+            handler = classify_volume(PROBE_ROOT, filesystem)
+        finally:
+            unmount_volume(PROBE_ROOT)
+    if handler is None:
+        print(f"livi-media-storage: no media or signed update on {device}")
+        return
+    unit = f"livi-os-usb@{name}.service" if handler == "update" else f"livi-media@{name}.service"
+    result = run([SYSTEMCTL, "--no-block", "start", unit])
+    if result.returncode != 0:
+        fail(result.stderr.strip() or f"cannot start {unit}")
+
+
+def mount_media(name):
+    device = device_path(name)
+    mount_volume(device, MEDIA_ROOT / name, MEDIA_FILESYSTEMS)
+
+
+def unmount_media(name):
+    if not valid_device_name(name):
+        fail(f"invalid block device name: {name}")
+    unmount_volume(MEDIA_ROOT / name)
+
+
+def main(arguments):
+    if len(arguments) != 2 or arguments[0] not in ("dispatch", "mount", "unmount"):
+        fail("usage: livi-media-storage {dispatch|mount|unmount} DEVICE")
+    action, name = arguments
+    if action == "dispatch":
+        dispatch(name)
+    elif action == "mount":
+        mount_media(name)
+    else:
+        unmount_media(name)
+
+
+if __name__ == "__main__":
+    try:
+        main(sys.argv[1:])
+    except OSError as error:
+        fail(str(error))

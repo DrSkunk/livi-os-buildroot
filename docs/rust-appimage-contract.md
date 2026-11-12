@@ -165,6 +165,36 @@ The service's claim/start/teardown switches run as root through systemd;
 they are not general sudo permissions. The existing persistent, root-owned
 systemd and NetworkManager configuration mounts support these operations.
 
+## Local music storage
+
+The OS routes each supported USB filesystem through
+`livi-usb-dispatch@.service` before mounting it. A stick containing
+`livi-update/livi-os-rpi4-update.json` or
+`livi-update/livi-os-rpi5-update.json` is handed only to the existing signed OS
+updater, which verifies the manifest signature. Other FAT32 (`vfat`) and exFAT volumes are mounted read-only at
+`/run/livi-media/<device>` with `nosuid,nodev,noexec`; the `livi` user gets
+read access. ext4 is accepted only for signed OS updates and is not exposed as
+portable music media. Music remains on the stick and is never copied by
+playback or scanning.
+
+`livi-media@<device>.service` owns each media mount and is bound to the block
+device lifetime. The application must stop playback and scanning before
+requesting safe removal with the single-purpose
+`sudo -n /usr/libexec/livi-media-eject <device>` command. It stops only the
+matching media unit; a busy mount fails rather than being lazily detached.
+The media mount helper is OS-owned and is not available through sudo.
+`/data/livi/music` is created and owned by `livi` during persistent-data setup.
+It is the writable internal library location; USB volumes remain read-only.
+
+Wireless music transfer is an unprivileged app capability, not an OS service or
+sudo interface. Its optional configuration is
+`/data/livi/config/LIVI/music-sync.json`; no website, signaling server, or
+ICE/TURN service is installed by the image. The app uses the hosted LIVI Music
+website and public PeerJS Cloud signaling, which needs outbound internet access. The app writes transfers only to
+internal storage, staging incomplete files in
+`/data/livi/.livi-music-transfer`, and requires on-device approval. See the app
+README for deployment and credential permissions.
+
 This replaces the OS's incompatible five-argument launcher contract; an OS
 rebuild is required. Do not repair it with a symlink alone: the environment,
 sudo permissions and Wi-Fi service must match as well. The native helper

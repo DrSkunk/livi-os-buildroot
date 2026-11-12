@@ -1,0 +1,9 @@
+[Unit]
+Description=Select LIVI media or OS update handling for USB partition %I
+After=dev-%i.device
+Requires=dev-%i.device
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/livi-media-storage dispatch %i
+TimeoutStartSec=30

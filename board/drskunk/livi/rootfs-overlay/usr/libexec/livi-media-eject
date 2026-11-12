@@ -1,0 +1,48 @@
+#!/usr/bin/python3
+
+import os
+import runpy
+import subprocess
+import sys
+from pathlib import Path
+
+MEDIA_ROOT = Path("/run/livi-media")
+SYSTEMCTL = "/usr/bin/systemctl"
+STORAGE = "/usr/libexec/livi-media-storage"
+
+
+def fail(message):
+    print(f"livi-media-eject: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def main(arguments):
+    storage = runpy.run_path(STORAGE)
+    if len(arguments) != 1 or not storage["valid_device_name"](arguments[0]):
+        fail("usage: livi-media-eject DEVICE")
+    name = arguments[0]
+    storage["device_path"](name)
+    try:
+        result = subprocess.run(
+            [SYSTEMCTL, "stop", f"livi-media@{name}.service"],
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+    except OSError as error:
+        fail(f"cannot run {SYSTEMCTL}: {error}")
+    if result.returncode != 0:
+        fail(result.stderr.strip() or f"cannot stop media volume {name}")
+    mountpoint = MEDIA_ROOT / name
+    if os.path.ismount(mountpoint):
+        # ExecStop may have failed while busy; retry even if the unit is now stopped.
+        storage["unmount_media"](name)
+    if os.path.ismount(mountpoint):
+        fail(f"{mountpoint} is still mounted; stop playback or scanning and retry")
+
+
+if __name__ == "__main__":
+    try:
+        main(sys.argv[1:])
+    except OSError as error:
+        fail(str(error))

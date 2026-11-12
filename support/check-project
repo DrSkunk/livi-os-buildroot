@@ -31,6 +31,8 @@ for required in \
   board/drskunk/livi/rootfs-overlay/usr/bin/livi-os-update \
   board/drskunk/livi/rootfs-overlay/usr/libexec/livi-os-update-helper \
   board/drskunk/livi/rootfs-overlay/usr/libexec/livi-power-helper \
+  board/drskunk/livi/rootfs-overlay/usr/libexec/livi-media-storage \
+  board/drskunk/livi/rootfs-overlay/usr/libexec/livi-media-eject \
   board/drskunk/livi/rootfs-overlay/usr/bin/livi-data-grow \
   support/make-os-update \
   board/drskunk/livi/rootfs-overlay/usr/libexec/livi-kiosk-ready \
@@ -108,7 +110,7 @@ for module in CONFIG_CAN_MCP251X CONFIG_CAN_GS_USB; do
   }
 done
 
-for symbol in CONFIG_USB_STORAGE CONFIG_EXFAT_FS CONFIG_NLS_CODEPAGE_437 CONFIG_NLS_ISO8859_1; do
+for symbol in CONFIG_USB_STORAGE CONFIG_EXFAT_FS CONFIG_NLS_CODEPAGE_437 CONFIG_NLS_ISO8859_1 CONFIG_NLS_UTF8; do
   grep -qx "$symbol=y" "$root/board/drskunk/livi/linux.fragment" || {
     echo "missing USB OS-update kernel option: $symbol" >&2
     failed=1
