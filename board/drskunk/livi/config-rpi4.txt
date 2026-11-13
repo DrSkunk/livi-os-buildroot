@@ -9,7 +9,7 @@ disable_splash=1
 dtoverlay=vc4-kms-v3d,cma-512
 max_framebuffers=3
 disable_fw_kms_setup=1
-camera_auto_detect=1
+camera_auto_detect=0
 # Waveshare 7.9inch HDMI LCD uses HDMI video and USB touch, not DSI.
 display_auto_detect=0
 dtparam=audio=on

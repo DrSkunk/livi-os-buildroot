@@ -22,22 +22,30 @@ if [ ! -e /data/livi/config/LIVI/config.json ] && [ ! -e /data/livi/config/confi
   trap - EXIT
 fi
 
-merge_dir() {
-  source="$1" destination="$2" name="$3"
-  if ! mountpoint -q "$source"; then
-    /usr/libexec/livi-merge-defaults "$source" "$destination" "/data/etc-defaults/$name"
-  fi
-}
-
-merge_dir /etc/bluetooth /data/etc/bluetooth bluetooth
-merge_dir /etc/minidsp /data/etc/minidsp minidsp
-merge_dir /etc/udev/rules.d /data/etc/udev/rules.d udev
-merge_dir /etc/systemd/system /data/etc/systemd/system systemd
-merge_dir /etc/NetworkManager/conf.d /data/etc/NetworkManager/conf.d NetworkManager
-if [ -d /usr/share/livi/games ]; then
-  merge_dir /usr/share/livi/games /data/games games
-fi
+# One interpreter start for all directories instead of one per directory.
+set --
+for entry in \
+  /etc/bluetooth:/data/etc/bluetooth:bluetooth \
+  /etc/minidsp:/data/etc/minidsp:minidsp \
+  /etc/udev/rules.d:/data/etc/udev/rules.d:udev \
+  /etc/systemd/system:/data/etc/systemd/system:systemd \
+  /etc/NetworkManager/conf.d:/data/etc/NetworkManager/conf.d:NetworkManager \
+  /usr/share/livi/games:/data/games:games; do
+  source="${entry%%:*}" rest="${entry#*:}"
+  destination="${rest%%:*}" name="${rest#*:}"
+  [ "$name" != games ] || [ -d "$source" ] || continue
+  mountpoint -q "$source" || set -- "$@" "$source" "$destination" "/data/etc-defaults/$name"
+done
+[ "$#" -eq 0 ] || /usr/libexec/livi-merge-defaults "$@"
 /usr/libexec/livi-retroarch-setup
+
+# Reloading systemd takes long and stalls every queued job; only do it when the
+# persistent unit directory differs from the units systemd already loaded.
+reload_units=1
+if ! mountpoint -q /etc/systemd/system &&
+  /usr/libexec/livi-merge-defaults --identical /etc/systemd/system /data/etc/systemd/system; then
+  reload_units=0
+fi
 
 mountpoint -q /var/lib/bluetooth || mount --bind /data/bluetooth /var/lib/bluetooth
 # systemd-timesyncd keeps its last-synced clock here; persisted so an offline
@@ -54,11 +62,14 @@ mountpoint -q /etc/NetworkManager/conf.d || \
   mount --bind /data/etc/NetworkManager/conf.d /etc/NetworkManager/conf.d
 
 ln -snf /data/games/retroarch /data/livi/config/retroarch
-chown -R livi:livi /data/livi /data/games /run/user/1000
+# Recursive chown rewrites every inode (ROMs, music) on each boot; touch only
+# entries whose ownership is actually wrong. -h matches chown -R's lchown.
+find /data/livi /data/games /run/user/1000 \( ! -user livi -o ! -group livi \) \
+  -exec chown -h livi:livi {} +
 chmod 0700 /run/user/1000 /data/network/system-connections
 chmod 0700 /data/lockdown
 chmod 0750 /data/livi/app /data/livi/config /data/livi/update
 
 # Re-read migrated units/rules after mounting their persistent directories.
-systemctl daemon-reload
+[ "$reload_units" = 0 ] || systemctl daemon-reload
 udevadm control --reload

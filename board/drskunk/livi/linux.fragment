@@ -1,5 +1,9 @@
 CONFIG_SQUASHFS=y
 CONFIG_SQUASHFS_XZ=y
+# The root SquashFS is LZ4: cheap to decompress, so library loads at boot stay fast.
+CONFIG_SQUASHFS_LZ4=y
+# The default single decompressor serializes parallel systemd startup reads.
+CONFIG_SQUASHFS_COMPILE_DECOMP_MULTI_PERCPU=y
 CONFIG_OVERLAY_FS=y
 CONFIG_TMPFS=y
 CONFIG_TMPFS_POSIX_ACL=y

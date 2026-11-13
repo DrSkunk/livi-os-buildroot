@@ -126,9 +126,10 @@ jobs:
         uses: actions/cache@v5.0.5
         with:
           path: buildroot/dl
-          key: buildroot-dl-${{ runner.os }}-${{ matrix.board }}-${{ hashFiles('Makefile', 'configs/**', 'package/**/*.mk', 'package/**/*.hash', 'patches/**') }}
+          # Both boards fetch the same sources, so they share one download cache.
+          key: buildroot-dl-${{ runner.os }}-${{ hashFiles('Makefile', 'configs/**', 'package/**/*.mk', 'package/**/*.hash', 'patches/**') }}
           restore-keys: |
-            buildroot-dl-${{ runner.os }}-${{ matrix.board }}-
+            buildroot-dl-${{ runner.os }}-
 
       - name: Cache compiler output
         uses: actions/cache@v5.0.5
@@ -151,7 +152,7 @@ jobs:
           # Commit time orders releases for the on-device downgrade check.
           LIVI_OS_SERIAL="$(git log -1 --format=%ct)"
           export LIVI_OS_SERIAL
-          make "${{ matrix.board }}"
+          make "${{ matrix.board }}" BR_TOPLEVEL_JOBS="$(nproc)"
 
       - name: Compress and checksum image
         env:

@@ -8,6 +8,8 @@ LIVI_OS_SIGNING_KEY ?=
 LIVI_APPIMAGE ?= artifacts/LIVI-arm64.AppImage
 LIVI_CARPIHAT ?= 1
 LIVI_CAN_OSCILLATOR ?=
+# Parallel package builds (per-package directories); empty keeps Buildroot serial.
+BR_TOPLEVEL_JOBS ?=
 export LIVI_CARPIHAT LIVI_CAN_OSCILLATOR
 
 .PHONY: help bootstrap pi4_defconfig pi5_defconfig pi4 pi5 pi4-update pi5-update menuconfig linux-menuconfig clean fetch-livi check check-livi test-runtime test-fetch-livi
@@ -48,8 +50,9 @@ check-livi:
 
 pi4 pi5: %: %_defconfig
 	# OpenSSH configure needs the target compiler driver to supply its sysroot headers.
-	$(MAKE) -C "$(BUILDROOT_DIR)" O="$(OUTPUT_BASE)/$@" BR2_EXTERNAL="$(CURDIR)" \
-		TARGET_CPP="$(OUTPUT_BASE)/$@/host/bin/aarch64-linux-gcc -E"
+	# Buildroot expands HOST_DIR per package when per-package directories are enabled.
+	$(MAKE) $(if $(BR_TOPLEVEL_JOBS),-j$(BR_TOPLEVEL_JOBS)) -C "$(BUILDROOT_DIR)" O="$(OUTPUT_BASE)/$@" BR2_EXTERNAL="$(CURDIR)" \
+		TARGET_CPP='$$(HOST_DIR)/bin/aarch64-linux-gcc -E'
 
 pi4-update pi5-update:
 	@test -n "$(LIVI_OS_SIGNING_KEY)" || { echo "Set LIVI_OS_SIGNING_KEY=path/to/private.pem" >&2; exit 1; }

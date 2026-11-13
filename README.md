@@ -243,6 +243,12 @@ Buildroot and avoids passing an outer jobserver into Kconfig's recursive Make
 probes. The latter failed with `write jobserver: Bad file descriptor` during
 BusyBox configuration in the x86-64 container validation.
 
+Both defconfigs enable Buildroot per-package directories, so independent
+packages can build at the same time. Pass `BR_TOPLEVEL_JOBS=$(nproc)` (for
+example `make pi5 BR_TOPLEVEL_JOBS=8`) to hand that job count directly to
+Buildroot's own top-level Make, which then owns the jobserver; CI does this.
+Leaving it unset builds one package at a time, as before.
+
 ### Pi 4 emulator smoke test
 
 With QEMU supporting `raspi4b`, export the Linux build's images to the host
@@ -441,8 +447,9 @@ still require review before production deployment.
 ## Continuous integration and releases
 
 GitHub Actions builds the Pi 4 and Pi 5 images in parallel on every push to
-`main`. Buildroot downloads and a board-specific 2 GiB compiler cache are kept
-between runs. Main-branch builds publish images to the rolling `nightly` release.
+`main`. A Buildroot download cache shared by both boards and a board-specific
+2 GiB compiler cache are kept between runs. Packages build in parallel through
+per-package directories (`BR_TOPLEVEL_JOBS`). Main-branch builds publish images to the rolling `nightly` release.
 
 Push a semantic version tag to create a release:
 
@@ -585,7 +592,12 @@ journal and leave the latch held rather than cutting power unexpectedly.
 | `LIVI_DATA` | ext4, initially 2 GiB | `/data` read-write | Updates, config, pairing, ROMs, saves, logs |
 
 The data filesystem uses journaling, barriers, `noatime`, a five-second commit
-interval, and `errors=remount-ro`. `/run`, `/tmp`, and `/var/log` are tmpfs. On
+interval, and `errors=remount-ro`. At boot, `systemd-fsck` replays the journal
+and runs a full check only when ext4 reports the filesystem as unclean or
+erroneous; a forced check of a large card on every boot would delay startup.
+Root SquashFS slots are LZ4-compressed and read with per-CPU decompressors,
+which favours fast library loads during boot over image size.
+`/run`, `/tmp`, and `/var/log` are tmpfs. On
 the first boot, `livi-data-grow` extends the final data partition over unused SD
 or NVMe capacity and grows ext4 online. It saves the pre-change GPT dump in
 `/run`, updates only the known final partition, and records `/data/.expanded`
@@ -623,6 +635,9 @@ folder and listed in `conflicts.json`. Review these conflicts during OS upgrades
 Legacy installations without a baseline retain their existing files and receive
 conflict proposals instead of having potentially customized files overwritten.
 The same migration supports returning to an older OS's defaults after rollback.
+When the factory defaults are unchanged, the migration skips scanning `/data`,
+and systemd is reloaded only if the persistent unit directory differs from the
+factory one.
 
 ## Clock and time sync
 
@@ -680,7 +695,11 @@ atomically restores `LIVI.AppImage.previous`. If that copy is missing or does no
 match the known-good hash, it restores `/opt/livi-factory/LIVI.AppImage` from
 SquashFS.
 
-An application rollback never rolls back user configuration or ROMs. The factory
+To avoid re-reading 300+ MiB payloads from SD on every boot, digests are cached
+in `/data/livi/app/.sha256-cache`, keyed by device, inode, size, mtime and ctime.
+Any rewrite, rename or replacement changes that key and forces a full rehash;
+files changed in the last few seconds are never cached. Deleting the directory
+is always safe. The factory
 copy is only updated when a new complete OS image is flashed.
 
 ### Update security

@@ -10,8 +10,31 @@ LOG=/data/livi/log/LIVI.log
 HEALTH_SECONDS=60
 STARTUP_SECONDS=60
 MAX_ATTEMPTS=3
+HASH_CACHE="$APP_DIR/.sha256-cache"
 
-hash_file() { sha256sum "$1" | awk '{print $1}'; }
+# Hashing the AppImages reads hundreds of MB from SD on every boot. Reuse the
+# digest while device, inode, size, mtime and ctime are all unchanged.
+hash_file() {
+  local path="$1" info key ctime cache digest now cached_key='' cached_hash=''
+  info="$(stat -L -c '%Z %d|%i|%s|%y|%z' -- "$path" 2>/dev/null)" || return 1
+  ctime="${info%% *}" key="${info#* }"
+  cache="$HASH_CACHE/${path//\//_}"
+  { IFS= read -r cached_key && IFS= read -r cached_hash; } 2>/dev/null < "$cache" || true
+  if [ -n "$key" ] && [ "$cached_key" = "$key" ] && [[ "$cached_hash" =~ ^[0-9a-f]{64}$ ]]; then
+    printf '%s\n' "$cached_hash"
+    return 0
+  fi
+  digest="$(sha256sum -- "$path" | awk '{print $1}')"
+  [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || return 1
+  # Coarse timestamps cannot reveal a rewrite in the same tick; like git's racy
+  # index check, cache only files that have been stable for a few seconds.
+  now="$(date +%s)"
+  if [[ "$ctime" =~ ^[0-9]+$ && "$now" =~ ^[0-9]+$ ]] && [ "$ctime" -lt "$((now - 2))" ]; then
+    { mkdir -p "$HASH_CACHE" && printf '%s\n%s\n' "$key" "$digest" > "$cache.new" &&
+      mv -f "$cache.new" "$cache"; } 2>/dev/null || rm -f "$cache.new" 2>/dev/null || true
+  fi
+  printf '%s\n' "$digest"
+}
 atomic_copy() {
   local src="$1" dest="$2"
   cp "$src" "$dest.new" && chmod 0755 "$dest.new" && sync && mv -f "$dest.new" "$dest" && sync
@@ -85,7 +108,8 @@ trap 'exit 130' INT
 /usr/libexec/livi-log-writer "$LOG" "$fatal_log" < "$runtime/output" &
 logger_pid=$!
 
-chown livi:livi "$CURRENT"
+# An unconditional chown bumps ctime and would invalidate the digest cache.
+[ "$(stat -c '%U:%G' "$CURRENT" 2>/dev/null)" = livi:livi ] || chown livi:livi "$CURRENT"
 cat /proc/sys/kernel/random/uuid > /run/user/1000/livi-os-session || exit 1
 rm -f /run/user/1000/livi-os-ready.json
 unset WAYLAND_DISPLAY DISPLAY

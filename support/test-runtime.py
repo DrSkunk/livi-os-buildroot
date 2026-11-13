@@ -3,6 +3,7 @@
 
 import os
 import runpy
+import shlex
 import shutil
 import hashlib
 import json
@@ -594,7 +595,7 @@ class ApplianceFirstBootDefaults(unittest.TestCase):
         sync.write_text("#!/bin/sh\nexit 0\n")
         sync.chmod(0o755)
         source = (SCRIPTS.parent / "libexec/livi-data-setup").read_text()
-        source = source[:source.index("\nmerge_dir()")]
+        source = source[:source.index("\n# One interpreter start")]
         self.script = self.path / "setup"
         self.script.write_text(source.replace("/data/", f"{self.data}/")
                                .replace("/usr/share/livi/config-default.json",
@@ -980,6 +981,90 @@ trap 'kill "$kiosk_pid" "$guard_pid" 2>/dev/null || true' EXIT
         self.assertEqual(slots, "mark-good\n")
 
 
+class SupervisorDigestCache(unittest.TestCase):
+    STAT = r'''#!/usr/bin/env python3
+import os, sys, time
+fmt, path = sys.argv[sys.argv.index("-c") + 1], sys.argv[-1]
+try:
+    st = os.stat(path)
+except OSError:
+    sys.exit(1)
+stamp = lambda ns: time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ns // 10**9)) + f".{ns % 10**9:09d}"
+for token, value in (("%Z", st.st_ctime_ns // 10**9), ("%d", st.st_dev), ("%i", st.st_ino),
+                     ("%s", st.st_size), ("%y", stamp(st.st_mtime_ns)), ("%z", stamp(st.st_ctime_ns))):
+    fmt = fmt.replace(token, str(value))
+print(fmt)
+'''
+    SHA = r'''#!/usr/bin/env python3
+import hashlib, os, sys
+path = sys.argv[-1]
+with open(os.environ["HASH_CALLS"], "a") as calls:
+    calls.write(path + "\n")
+print(hashlib.sha256(open(path, "rb").read()).hexdigest() + "  " + path)
+'''
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name)
+        bin_dir = self.path / "bin"
+        bin_dir.mkdir()
+        for name, body in (("stat", self.STAT), ("sha256sum", self.SHA),
+                           ("date", "#!/bin/sh\necho 99999999999\n")):
+            (bin_dir / name).write_text(body)
+            (bin_dir / name).chmod(0o755)
+        self.calls = self.path / "calls"
+        self.calls.touch()
+        self.image = self.path / "LIVI.AppImage"
+        source = (SCRIPTS / "livi-supervisor").read_text()
+        start = source.index("hash_file() {")
+        function = source[start:source.index("\n}\n", start) + 3]
+        self.script = f'HASH_CACHE={shlex.quote(str(self.path / "cache"))}\n{function}hash_file "$1"\n'
+        self.env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
+                    "HASH_CALLS": str(self.calls)}
+
+    def digest(self):
+        result = subprocess.run(["bash", "-c", self.script, "_", str(self.image)],
+                                capture_output=True, text=True, env=self.env, check=True)
+        return result.stdout.strip()
+
+    def hashed(self):
+        return len(self.calls.read_text().splitlines())
+
+    def test_unchanged_file_reuses_cached_digest(self):
+        self.image.write_bytes(b"first")
+        expected = hashlib.sha256(b"first").hexdigest()
+        self.assertEqual(self.digest(), expected)
+        self.assertEqual(self.digest(), expected)
+        self.assertEqual(self.hashed(), 1)
+
+    def test_rewrite_or_replacement_rehashes(self):
+        self.image.write_bytes(b"first")
+        self.digest()
+        self.image.write_bytes(b"other")
+        self.assertEqual(self.digest(), hashlib.sha256(b"other").hexdigest())
+        replacement = self.path / "new"
+        replacement.write_bytes(b"third")
+        replacement.replace(self.image)
+        self.assertEqual(self.digest(), hashlib.sha256(b"third").hexdigest())
+        self.assertEqual(self.hashed(), 3)
+
+    def test_corrupt_cache_is_ignored(self):
+        self.image.write_bytes(b"first")
+        self.digest()
+        cache = next((self.path / "cache").iterdir())
+        cache.write_text(cache.read_text().splitlines()[0] + "\nnot-a-digest\n")
+        self.assertEqual(self.digest(), hashlib.sha256(b"first").hexdigest())
+        self.assertEqual(self.hashed(), 2)
+
+    def test_recently_changed_file_is_not_cached(self):
+        (self.path / "bin/date").write_text("#!/bin/sh\necho 0\n")
+        self.image.write_bytes(b"first")
+        self.digest()
+        self.digest()
+        self.assertEqual(self.hashed(), 2)
+
+
 
 class DefaultsMigration(unittest.TestCase):
     def setUp(self):
@@ -992,11 +1077,41 @@ class DefaultsMigration(unittest.TestCase):
         module = runpy.run_path(str(SCRIPTS.parent / "libexec/livi-merge-defaults"))
         self.merge_defaults = module["merge"]
         patcher = mock.patch.object(module["os"], "sync")
-        patcher.start()
+        self.sync = patcher.start()
         self.addCleanup(patcher.stop)
+        self.main = module["main"]
 
     def merge(self):
         self.merge_defaults(self.source, self.target, self.state)
+
+    def test_unchanged_defaults_do_not_rescan_or_sync(self):
+        (self.source / "config").write_text("factory")
+        self.merge()
+        (self.target / "config").write_text("local")
+        self.sync.reset_mock()
+        with mock.patch.dict(self.merge_defaults.__globals__,
+                             entries=mock.Mock(wraps=self.merge_defaults.__globals__["entries"])) as scope:
+            self.merge()
+            scanned = [call.args[0] for call in scope["entries"].call_args_list]
+        self.assertEqual(scanned, [self.source])
+        self.sync.assert_not_called()
+        self.assertEqual((self.target / "config").read_text(), "local")
+
+    def test_identical_reports_whether_trees_match(self):
+        (self.source / "unit").write_text("factory")
+        self.merge()
+        self.assertEqual(self.main(["--identical", str(self.source), str(self.target)]), 0)
+        (self.target / "unit").write_text("local")
+        self.assertEqual(self.main(["--identical", str(self.source), str(self.target)]), 1)
+
+    def test_merges_multiple_directories_in_one_run(self):
+        other = [self.path / n for n in ("factory2", "live2", "state2")]
+        other[0].mkdir()
+        (self.source / "a").write_text("a")
+        (other[0] / "b").write_text("b")
+        self.assertEqual(self.main([str(p) for p in (self.source, self.target, self.state, *other)]), 0)
+        self.assertEqual((self.target / "a").read_text(), "a")
+        self.assertEqual((other[1] / "b").read_text(), "b")
 
     def test_update_and_rollback_untouched_defaults(self):
         (self.source / "config").write_text("old")

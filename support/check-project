@@ -117,6 +117,14 @@ for symbol in CONFIG_USB_STORAGE CONFIG_EXFAT_FS CONFIG_NLS_CODEPAGE_437 CONFIG_
   }
 done
 
+for board in rpi4 rpi5; do
+  if grep -qx 'BR2_TARGET_ROOTFS_SQUASHFS4_LZ4=y' "$root/configs/livi_${board}_defconfig" &&
+    ! grep -qx 'CONFIG_SQUASHFS_LZ4=y' "$root/board/drskunk/livi/linux.fragment"; then
+    echo "LZ4 root SquashFS needs built-in kernel LZ4 support: $board" >&2
+    failed=1
+  fi
+done
+
 grep -q 'livi-os-apply.service' "$root/board/drskunk/livi/post-build.sh" || {
   echo "staged OS updates would never be applied at boot" >&2
   failed=1
