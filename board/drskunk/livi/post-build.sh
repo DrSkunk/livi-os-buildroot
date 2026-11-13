@@ -53,6 +53,7 @@ for executable in bin/bash usr/bin/stat usr/bin/dbus-run-session usr/bin/pipewir
   usr/bin/pipewire-pulse usr/bin/wireplumber usr/bin/jq usr/bin/unsquashfs \
   usr/bin/pactl usr/bin/xdg-user-dir usr/libexec/livi-helperd usr/bin/pkill usr/bin/pgrep \
   usr/bin/python3 usr/libexec/livi-carpihat-power usr/libexec/livi-can-capture usr/libexec/livi-ssh-hostkey \
+  usr/libexec/livi-ssh-keys usr/sbin/sshd usr/bin/ssh-keygen \
   usr/libexec/livi-obd2 \
   usr/local/lib/livi/livi-touch-filter usr/bin/retroarch; do
   [ -x "$TARGET/$executable" ] || {

@@ -2,7 +2,7 @@ Port 22
 HostKey /data/livi/ssh/ssh_host_ed25519_key
 PubkeyAuthentication yes
 AuthenticationMethods publickey
-AuthorizedKeysFile /etc/ssh/authorized_keys/%u
+AuthorizedKeysFile /etc/ssh/authorized_keys/%u /run/livi-ssh/authorized_keys/%u
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 PermitRootLogin no

@@ -46,13 +46,10 @@ pi4_defconfig pi5_defconfig: bootstrap
 check-livi:
 	python3 support/check-rust-payload --appimage "$(LIVI_APPIMAGE)"
 
-pi4: pi4_defconfig
+pi4 pi5: %: %_defconfig
 	# OpenSSH configure needs the target compiler driver to supply its sysroot headers.
-	$(MAKE) -C "$(BUILDROOT_DIR)" O="$(OUTPUT_BASE)/pi4" BR2_EXTERNAL="$(CURDIR)" \
-		TARGET_CPP="$(OUTPUT_BASE)/pi4/host/bin/aarch64-linux-gcc -E"
-
-pi5: pi5_defconfig
-	$(MAKE) -C "$(BUILDROOT_DIR)" O="$(OUTPUT_BASE)/pi5" BR2_EXTERNAL="$(CURDIR)"
+	$(MAKE) -C "$(BUILDROOT_DIR)" O="$(OUTPUT_BASE)/$@" BR2_EXTERNAL="$(CURDIR)" \
+		TARGET_CPP="$(OUTPUT_BASE)/$@/host/bin/aarch64-linux-gcc -E"
 
 pi4-update pi5-update:
 	@test -n "$(LIVI_OS_SIGNING_KEY)" || { echo "Set LIVI_OS_SIGNING_KEY=path/to/private.pem" >&2; exit 1; }

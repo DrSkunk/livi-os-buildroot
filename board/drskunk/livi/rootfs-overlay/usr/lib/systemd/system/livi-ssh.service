@@ -2,9 +2,11 @@
 Description=Key-only LAN SSH diagnostics
 Requires=livi-data-setup.service
 After=livi-data-setup.service network.target
+RequiresMountsFor=/boot
 
 [Service]
 Type=simple
+ExecCondition=/usr/libexec/livi-ssh-keys
 ExecStartPre=/usr/libexec/livi-ssh-hostkey
 ExecStartPre=/usr/sbin/sshd -t -f /etc/ssh/sshd_config
 ExecStart=/usr/sbin/sshd -D -e -f /etc/ssh/sshd_config

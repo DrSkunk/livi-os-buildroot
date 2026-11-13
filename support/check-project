@@ -130,10 +130,16 @@ grep -q '^livi 1000 livi 1000 \* ' "$root/board/drskunk/livi/users.txt" || {
   echo "LIVI password login must be disabled" >&2
   failed=1
 }
-grep -qx 'BR2_PACKAGE_OPENSSH=y' "$root/configs/livi_rpi4_defconfig" || {
-  echo "Pi 4 key-only diagnostics require OpenSSH" >&2
-  failed=1
-}
+for board in rpi4 rpi5; do
+  grep -qx 'BR2_PACKAGE_OPENSSH=y' "$root/configs/livi_${board}_defconfig" || {
+    echo "$board key-only diagnostics require OpenSSH" >&2
+    failed=1
+  }
+  grep -q '^BR2_ROOTFS_POST_FAKEROOT_SCRIPT=.*post-fakeroot.sh"$' "$root/configs/livi_${board}_defconfig" || {
+    echo "$board must run post-fakeroot.sh to provision SSH and the helper" >&2
+    failed=1
+  }
+done
 for setting in \
   'AuthenticationMethods publickey' \
   'PasswordAuthentication no' \
@@ -163,12 +169,10 @@ for board in pi4 pi5; do
       failed=1
     fi
   done
-  if [ "$board" = pi4 ]; then
-    grep -qx 'BR2_PACKAGE_OPENSSH=y' "$output_base/$board/.config" || {
-      echo "missing resolved OpenSSH runtime dependency: $board" >&2
-      failed=1
-    }
-  fi
+  grep -qx 'BR2_PACKAGE_OPENSSH=y' "$output_base/$board/.config" || {
+    echo "missing resolved OpenSSH runtime dependency: $board" >&2
+    failed=1
+  }
   grep -qx 'BR2_PACKAGE_HOST_KMOD_XZ=y' "$output_base/$board/.config" || {
     echo "missing host XZ kernel-module indexing support: $board" >&2
     failed=1

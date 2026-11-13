@@ -356,15 +356,35 @@ password. Recovery requires trusted physical media access or a deliberately
 provisioned development image. This is not Raspberry Pi secure boot and does not
 protect against an attacker who can replace the boot media.
 
-Pi 4 images enable SSH only when the local, git-ignored
-`artifacts/livi-debug-authorized_keys` file contains one or two Ed25519 public
-keys. SSH permits those keys for the `livi` account only; SSH password/root login
-and all forwarding are disabled. A per-build random password hash (with its
+SSH is off by default on Pi 4 and Pi 5 images. To turn it on for debugging, put
+the card in a computer and save a plain text file named
+`livi-ssh-authorized_keys` on the `LIVI_BTCTL` drive (the first, FAT partition)
+containing one to four Ed25519 public keys:
+
+```sh
+ssh-keygen -t ed25519 -f ~/.ssh/livi-debug        # once, on your computer
+cp ~/.ssh/livi-debug.pub /Volumes/LIVI_BTCTL/livi-ssh-authorized_keys
+```
+
+Blank lines, `#` comments, CRLF line endings and a UTF-8 BOM are accepted; any
+other line, including keys of another type or with options, makes LIVI ignore the
+whole file. Eject the card, boot the Pi and connect from the same LAN with
+`ssh -i ~/.ssh/livi-debug livi@livi.local`. Delete the file to turn SSH off
+again from the next boot; OS updates only rewrite `autoboot.txt` and keep it.
+Never put a private key or password on that drive. If `ssh` is refused, check
+that the file name is exact and that every non-comment line is an
+`ssh-ed25519` key.
+
+A build can also bake in one or two keys from the local, git-ignored
+`artifacts/livi-debug-authorized_keys` file, which keeps SSH on without the boot
+file; changing those keys requires another OS image build.
+
+Either way SSH permits those keys for the `livi` account only; SSH password/root
+login and all forwarding are disabled. A per-build random password hash (with its
 plaintext discarded) lets OpenSSH accept public-key authentication for the
 otherwise locked account. Keep the Pi on a trusted LAN and do not forward port
-22 from the internet. Connect from the same LAN with
-`ssh -i ~/.ssh/livi-debug livi@livi.local`. Remove the key artifact and rebuild
-to disable SSH; changing the authorized key requires another OS image build.
+22 from the internet. Anyone who can write the SD card can enable SSH this way,
+which grants no more than the physical access described above already does.
 The host key is generated on first boot and stored on the writable data partition.
 
 The application supervisor, logger and configuration guard run as `livi`, not
