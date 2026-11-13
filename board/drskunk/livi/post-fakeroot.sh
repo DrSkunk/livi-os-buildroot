@@ -17,28 +17,34 @@ chown 0:0 "$helper"
 chmod 0755 "$helper"
 
 rm -f "$ssh_service" "$default_ssh_service" "$ssh_keys_dir/livi"
-[ -f "$ssh_authorized_keys" ] || exit 0
 
-for executable in usr/bin/ssh-keygen usr/sbin/sshd; do
+for executable in usr/bin/ssh-keygen usr/sbin/sshd usr/libexec/livi-ssh-keys; do
   [ -x "$TARGET/$executable" ] || {
-    echo "Debug SSH key supplied but OpenSSH is missing: /$executable" >&2
+    echo "Key-only SSH diagnostics require /$executable" >&2
     exit 1
   }
 done
 
-if ! awk '
-  NR > 2 || NF < 2 || NF > 3 ||
-    $1 != "ssh-ed25519" || $2 !~ /^[A-Za-z0-9+\/=]+$/ { exit 1 }
-  END { if (NR < 1 || NR > 2) exit 1 }
-' "$ssh_authorized_keys"; then
-  echo "Debug SSH access accepts one or two Ed25519 public keys" >&2
-  exit 1
-fi
+mkdir -p "$TARGET/var/empty" "$TARGET/etc/systemd/system/multi-user.target.wants"
+chmod 0755 "$TARGET/var/empty"
+chown 0:0 "$TARGET/var/empty"
 
-mkdir -p "$ssh_keys_dir" "$TARGET/var/empty" "$TARGET/etc/systemd/system/multi-user.target.wants"
-install -m 0644 "$ssh_authorized_keys" "$ssh_keys_dir/livi"
-chmod 0755 "$ssh_keys_dir" "$TARGET/var/empty"
-chown 0:0 "$ssh_keys_dir" "$ssh_keys_dir/livi" "$TARGET/var/empty"
+# An optional build-time key is baked in; otherwise SSH stays off until a key
+# file is placed on the boot-control partition (see livi-ssh-keys).
+if [ -f "$ssh_authorized_keys" ]; then
+  if ! awk '
+    NR > 2 || NF < 2 || NF > 3 ||
+      $1 != "ssh-ed25519" || $2 !~ /^[A-Za-z0-9+\/=]+$/ { exit 1 }
+    END { if (NR < 1 || NR > 2) exit 1 }
+  ' "$ssh_authorized_keys"; then
+    echo "Debug SSH access accepts one or two Ed25519 public keys" >&2
+    exit 1
+  fi
+  mkdir -p "$ssh_keys_dir"
+  install -m 0644 "$ssh_authorized_keys" "$ssh_keys_dir/livi"
+  chmod 0755 "$ssh_keys_dir"
+  chown 0:0 "$ssh_keys_dir" "$ssh_keys_dir/livi"
+fi
 
 if [ ! -x "${HOST_DIR:?Buildroot host directory missing}/bin/openssl" ]; then
   echo "OpenSSL host tool required to provision key-only SSH account" >&2

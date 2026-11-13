@@ -1,0 +1,40 @@
+#!/bin/sh
+# ExecCondition for livi-ssh.service: exit 0 starts sshd, exit 1 skips it.
+set -eu
+
+build_keys=/etc/ssh/authorized_keys/livi
+boot_keys=/boot/livi-ssh-authorized_keys
+runtime_dir=/run/livi-ssh/authorized_keys
+runtime_keys="$runtime_dir/livi"
+ed25519_prefix=AAAAC3NzaC1lZDI1NTE5AAAAI
+
+rm -f "$runtime_keys"
+
+if [ -L "$boot_keys" ]; then
+  echo "Ignoring symlinked $boot_keys" >&2
+elif [ -f "$boot_keys" ]; then
+  if [ "$(wc -c < "$boot_keys")" -gt 8192 ]; then
+    echo "Ignoring $boot_keys: larger than 8 KiB" >&2
+  else
+    install -d -m 0755 "${runtime_dir%/*}" "$runtime_dir"
+    temporary="$(mktemp "$runtime_dir/.livi.XXXXXX")"
+    trap 'rm -f "$temporary"' EXIT
+    # Accept files saved on Windows/macOS: CRLF, UTF-8 BOM, comments, blank lines.
+    if tr -d '\r' < "$boot_keys" | awk -v bom="$(printf '\357\273\277')" -v prefix="$ed25519_prefix" '
+        NR == 1 && index($0, bom) == 1 { $0 = substr($0, length(bom) + 1) }
+        /^[[:space:]]*(#|$)/ { next }
+        NF < 2 || $1 != "ssh-ed25519" || length($2) != 68 ||
+          index($2, prefix) != 1 || $2 !~ /^[A-Za-z0-9+\/]+=*$/ || ++keys > 4 { bad = 1; exit 1 }
+        { print $1, $2 }
+        END { if (bad || keys < 1) exit 1 }
+      ' > "$temporary"; then
+      chmod 0644 "$temporary"
+      mv "$temporary" "$runtime_keys"
+      echo "Enabled SSH for livi with keys from $boot_keys"
+    else
+      echo "Ignoring $boot_keys: expected one to four ssh-ed25519 public keys" >&2
+    fi
+  fi
+fi
+
+[ -s "$runtime_keys" ] || [ -s "$build_keys" ]

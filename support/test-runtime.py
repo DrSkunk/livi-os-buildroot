@@ -635,6 +635,69 @@ class ApplianceFirstBootDefaults(unittest.TestCase):
         self.assertEqual(victim.read_text(), "preserve")
 
 
+class SshBootKeys(unittest.TestCase):
+    HELPER = ROOT / "board/drskunk/livi/rootfs-overlay/usr/libexec/livi-ssh-keys"
+    KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINMQ6O2iMhPeoABqViQyV8cneylKN0X/X1yDy9q0t60K"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name)
+        self.boot = self.path / "boot/livi-ssh-authorized_keys"
+        self.baked = self.path / "etc/authorized_keys/livi"
+        self.runtime = self.path / "run/livi-ssh/authorized_keys/livi"
+        self.boot.parent.mkdir()
+        self.script = self.path / "livi-ssh-keys"
+        self.script.write_text(self.HELPER.read_text()
+                               .replace("/etc/ssh/authorized_keys/livi", str(self.baked))
+                               .replace("/boot/", f"{self.path}/boot/")
+                               .replace("/run/livi-ssh", f"{self.path}/run/livi-ssh"))
+
+    def run_helper(self):
+        return subprocess.run(["sh", str(self.script)], capture_output=True, text=True)
+
+    def test_windows_saved_file_enables_ssh_with_normalized_keys(self):
+        self.boot.write_bytes(("\ufeff# laptop\r\n\r\n" + self.KEY + " me@my laptop\r\n").encode())
+        self.assertEqual(self.run_helper().returncode, 0)
+        self.assertEqual(self.runtime.read_text(), self.KEY + "\n")
+        self.assertEqual(self.runtime.stat().st_mode & 0o777, 0o644)
+
+    def test_invalid_file_never_installs_any_key(self):
+        cases = [
+            self.KEY + "\nssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQ user\n",
+            'command="sh" ' + self.KEY + "\n",
+            self.KEY[:-1] + "\n",
+            "# only a comment\n",
+            "\n".join([self.KEY] * 5) + "\n",
+        ]
+        for content in cases:
+            with self.subTest(content=content):
+                self.boot.write_text(content)
+                result = self.run_helper()
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("Ignoring", result.stderr)
+                self.assertFalse(self.runtime.exists())
+
+    def test_removing_the_boot_file_disables_ssh_again(self):
+        self.boot.write_text(self.KEY + "\n")
+        self.assertEqual(self.run_helper().returncode, 0)
+        self.boot.unlink()
+        self.assertEqual(self.run_helper().returncode, 1)
+        self.assertFalse(self.runtime.exists())
+
+    def test_symlinked_boot_file_is_ignored(self):
+        target = self.path / "keys"
+        target.write_text(self.KEY + "\n")
+        self.boot.symlink_to(target)
+        self.assertEqual(self.run_helper().returncode, 1)
+        self.assertFalse(self.runtime.exists())
+
+    def test_build_time_key_keeps_ssh_enabled_without_boot_file(self):
+        self.baked.parent.mkdir(parents=True)
+        self.baked.write_text(self.KEY + "\n")
+        self.assertEqual(self.run_helper().returncode, 0)
+
+
 class RetroArchSetup(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -1635,6 +1698,7 @@ class CarPiHATPostBuild(unittest.TestCase):
             "usr/libexec/livi-helperd", "usr/bin/python3", "usr/bin/pkill", "usr/bin/pgrep",
             "usr/bin/flock", "usr/bin/systemctl", "usr/bin/sudo",
             "usr/local/lib/livi/livi-touch-filter", "usr/bin/retroarch",
+            "usr/sbin/sshd", "usr/bin/ssh-keygen",
         ):
             file = self.target / name
             file.parent.mkdir(parents=True, exist_ok=True)
