@@ -1,125 +1,41 @@
 # LIVI OS technical reference
 
-Design notes, build details and limitations behind the [README](../README.md).
+System design and implementation notes. For installation and common commands,
+start with the [README](../README.md). Hardware setup is in the
+[Pi 5 guide](hardware-setup-pi5.md); CAN setup is in the
+[Haltech guide](HALTECH-CAN.md); the app interface is specified in the
+[AppImage contract](rust-appimage-contract.md).
 
 ## Status
 
-The confirmed deployment scope is **Pi 4, Waveshare 7.9-inch HDMI/USB touch,
-Canada (`CA`), dongle-based CarPlay/Android Auto, and native Android Auto without
-a dongle**. Native Apple CarPlay is not part of this acceptance target.
+The images target Raspberry Pi 4 and Pi 5 with the Waveshare 7.9-inch
+1280×400 HDMI/USB-touch display. They use a custom Rust/Slint AppImage
+implementing [LIVI OS API 2](rust-appimage-contract.md), direct DRM/KMS
+rendering and an immutable OS-owned helper. An unmodified upstream AppImage is
+not compatible. Native Apple CarPlay is outside the acceptance scope.
 
-**Rust migration in progress:** this source tree now requires a custom
-Rust/Slint AppImage implementing [LIVI OS API 2](rust-appimage-contract.md).
-It launches Smithay directly on DRM/KMS, without Electron or Cage. The custom
-AppImage must implement rotation, the immutable helper boundary and the readiness
-heartbeat; an unmodified upstream Rust AppImage is not sufficient. No Rust
-image or hardware acceptance has been completed yet.
+The image includes A/B SquashFS roots, writable ext4 data, systemd,
+NetworkManager, Bluetooth, Wayland, PipeWire, RetroArch, local music and signed
+OS updates. AppImage updates remain writable and have a separate rollback path.
+ROMs and saves live under `/data/games`; internal music lives under
+`/data/livi/music`.
 
-Historical validation of the previous Electron image: the ARM64 LIVI AppImage and
-full Buildroot disk image built successfully, and the actual Pi 4 kernel/root
-boot under QEMU with read-only SquashFS/FAT, writable ext4, first-boot data
-expansion and persistent-data setup passing. A separate Ubuntu ARM64 VM renders
-LIVI's UI at 1280×400 using software rendering. Neither result validates physical
-Pi graphics, touch, audio, radios, phone projection or firmware rollback.
-The Pi-model emulator correctly fails kiosk readiness without the required
-display/audio hardware; it is not an application acceptance pass.
+The bundled RetroArch cores are Nestopia UE, Snes9x, Gambatte, mGBA and Genesis
+Plus GX. The latter is non-commercial; obtain separate permission before using
+it in a commercial product. Starter ROMs and their licenses are documented
+under `/usr/share/doc/livi-homebrew`.
 
-This project produces separate ARM64 images for Raspberry Pi 4 and Raspberry Pi
-5. The userspace and update/recovery design are shared; separate kernels are used
-because the boards have different SoCs and kernel defconfigs.
-
-The configuration includes:
-
-- A/B SquashFS read-only roots and a normally read-only FAT boot partition
-- ext4 `LIVI_DATA` partition for application/configuration/ROM state
-- systemd, NetworkManager, BlueZ, hostapd, dnsmasq and Avahi
-- Mesa V3D/VC4, DRM/KMS, Wayland, seatd and libinput for the Rust compositor
-- PipeWire, its PulseAudio compatibility server, and WirePlumber
-- Python 3 for OS recovery, readiness and CAN capture tools; immutable Rust projection helper
-- SPI/MCP2515 and gs_usb drivers, CAN hotplug configuration, and checked
-  1 Mbit/s listen-only capture (see hardware clock requirements below)
-- libxkbcommon, libgudev and libva for the Rust graphics/media runtime
-- PulseAudio client tools for volume control, and SBC for PipeWire Bluetooth audio
-- RetroArch 1.22.2 with pinned NES, SNES, GB/GBC, GBA, Genesis and Master System cores
-- minidsp-rs 0.1.12 daemon and loopback API on port 5380
-- writable AppImage updates plus signed A/B OS updates and rollback
-- last-known-good `config.json` recovery
-
-The immutable image includes Nestopia UE (NES), Snes9x (SNES), Gambatte
-(Game Boy and Game Boy Color), mGBA (Game Boy Advance), and Genesis Plus GX
-(Genesis/Mega Drive and Master System). LIVI's importer resolves these exact
-core filenames from `/usr/lib/libretro`; ROMs, playlists, thumbnails, saves and
-user-installed cores remain writable under `/data/games`.
-
-mGBA's optional link-time optimization is disabled because the pinned GCC 14.3
-toolchain hit an internal `jobserver_info::return_token` compiler error at the
-final link during Linux-container validation. Normal compiler optimization and
-the core's features remain enabled.
-
-RetroArch uses the `glcore` video driver and the touch-oriented **GLUI** menu,
-with bundled fonts/icons and touch-pointer navigation enabled. It runs fullscreen
-with the `wayland` input driver so taps and swipes arrive through LIVI's
-compositor in screen coordinates; gamepads still use the `udev` joypad driver.
-RetroArch is patched so menu drag/swipe keeps working on panels whose EDID
-reports no physical size. The legacy `gl` driver crashes during Wayland/EGL
-startup on the Pi. On the first boot after this update, existing settings are
-backed up as `retroarch.cfg.before-touch-v2` and
-the graphics/menu/input/asset settings are repaired once. Other settings,
-including custom save directories, are preserved; subsequent user edits are not
-reset on boot. Configuration lives in `/data/games/retroarch/retroarch.cfg`.
-
-The starter library includes **Red Rod Racing** (Game Boy, MIT) and **Tobu Tobu
-Girl** (Game Boy, MIT code / CC BY 4.0 assets). ROM downloads are pinned and
-SHA-256 verified, with attribution under `/usr/share/doc/livi-homebrew`.
-Red Rod Racing uses Start to begin, A to select/accelerate, and the D-pad to
-steer. Use a gamepad for gameplay; touch is for the menus.
-Standard Linux gamepad profiles are included. Press **Start + Select** together
-to open the RetroArch menu during a game, then choose **Quit RetroArch** to
-return to LIVI.
-
-In native LIVI, keep using the Games cards to launch games. **Add games → Browse**
-copies an extracted ROM from local storage or a mounted USB drive; **Rescan**
-imports ROMs placed directly in `/data/games/roms`. **Basic settings** opens
-LIVI's Games settings, while **RetroArch** opens the full emulator configuration.
-
-Genesis Plus GX is the core currently hard-coded by LIVI for both Genesis and
-Master System. Its upstream license is non-commercial. Do not distribute this
-core in a commercial product without separate permission; replace it and update
-LIVI's core mapping for a commercial deployment.
-Android Auto and the common wireless OS stack are included. Native Apple CarPlay
-remains outside the acceptance scope and requires separate hardware and protocol
-integration. Python projection drivers and their pip dependencies are no longer
-used. Actual Rust phone/dongle sessions still require hardware testing.
+Boot/storage behavior has been exercised in QEMU, but that does not validate
+the Pi's display, touch, audio, radios, phone projection or firmware rollback.
+Physical hardware acceptance is still required.
 
 ## Boot splash
 
-Both boards use the supplied `ZIP_TIE_TUNING_LOGO-14.eps` vector artwork,
-rendered as an antialiased white logo on a black 1280x400 RGB canvas in
-`board/drskunk/livi/boot-splash.png`. Empty source margins are removed without
-cropping the artwork; the logo is fitted to 651x320 pixels and centered with
-40-pixel top/bottom margins. An early
-`livi-splash.service` draws it with psplash as soon as Linux exposes `/dev/fb0`,
-without waiting for networking or the data partition. It rotates the framebuffer
-90 degrees for the Waveshare panel. The Pi firmware rainbow and Linux penguin
-logo are disabled; normal boot messages stay off the HDMI screen. Serial
-diagnostics and the system journal remain available.
-
-LIVI explicitly stops the splash before starting its supervisor so it cannot
-compete with the Rust DRM compositor. The two services must not conflict:
-requesting both during boot can otherwise discard the splash start job.
-Image assembly refreshes the board's kernel command line on every build,
-including incremental builds, so stale firmware-package output cannot
-restore HDMI console text.
-A brief black handoff is possible; this does not promise a
-first-frame-seamless transition. No image can be displayed by this service
-before Linux/KMS has initialized, and panel timing must be checked on the Pi.
-The artwork is compiled into psplash and requires an OS rebuild to change.
-This is included in the next image build, not the previously flashed image.
-
-The bundled GStreamer libav plugin needs libva (including its X11 library),
-libssh and the Vulkan loader even when decoding H.264 or H.265 in software.
-Both images include these runtime libraries; they do not imply VA-API or
-Vulkan hardware decoding support, and the kiosk continues to use Wayland.
+The early psplash service displays the compiled white logo on black, rotated for
+the Waveshare panel. LIVI stops psplash before starting the DRM compositor, so
+a brief black handoff is possible. Changing the artwork requires an OS rebuild.
+The media bundle includes libva, libssh and Vulkan runtime libraries required by
+its GStreamer plugin; their presence does not imply hardware decoding support.
 
 ## Local music
 
@@ -127,7 +43,8 @@ With the matching Local Music AppImage, open **Media → Local Music** to browse
 folders and relative M3U/M3U8 playlists using the existing playback controls.
 Put internal music in `/data/livi/music`, or insert a FAT32/exFAT USB stick.
 The OS mounts music volumes read-only at `/run/livi-media/<device>` and never
-copies or modifies their files. Refresh the library after inserting a drive.
+copies or modifies their files. LIVI notices inserted and pulled drives within
+a few seconds; pulling the drive that is playing stops playback.
 Only the selected folder's tracks or selected playlist are queued.
 
 USB volumes containing `livi-update/livi-os-rpi4-update.json` or
@@ -152,269 +69,73 @@ leave partial files under `/data/livi/.livi-music-transfer`.
 Physical USB audio playback, phone interruption/resume and surprise removal
 still need Pi hardware acceptance; host tests do not establish that acceptance.
 
-## Host requirements
-
-An x86-64 Linux build host (required by the prebuilt Bootlin toolchain) with Git, GNU Make, GCC, Python 3.11+, `curl`, `readelf`, `unsquashfs`, and normal
-Buildroot host prerequisites is required. Expect a substantial first build: the
-AppImage includes its Rust UI/media payload and the graphics/audio stack is compiled
-from source.
-
 ## Build
 
-Buildroot is pinned to `2026.05.1` and its exact commit is verified by the wrapper.
+Use the x86-64 Linux build host or Docker setup in the
+[README](../README.md#building). Buildroot is pinned to `2026.05.1`.
+After `make bootstrap`, provide a Rust AppImage that meets the API-2 contract,
+run `make check-livi`, then `make pi4` or `make pi5`. Outputs are under
+`output/<board>/images/`.
 
-```sh
-make bootstrap
+`make fetch-livi` downloads a selected release and records its SHA-256, but
+does not make an incompatible AppImage usable. `make check-livi` validates the
+API-2 payload. If the selected release fails, supply the compatible AppImage
+and `.sha256` sidecar in `artifacts/`. Archive the exact pair for reproducible
+releases. Use a fresh output tree when migrating from Electron; incremental
+Buildroot builds retain removed packages. `LIVI_CARPIHAT=0` builds for USB-C
+bench power; use the same setting for OS updates.
 
-# DrSkunk/LIVI currently publishes the ARM64 build on its nightly release tag.
-make fetch-livi
-make check-livi
-
-make pi4
-make pi5
-```
-
-Both images enable CarPiHAT ignition/power control by default. For USB-C-only
-bench use without a HAT, build with `make pi5 LIVI_CARPIHAT=0` (or `make pi4
-LIVI_CARPIHAT=0`). An empty `LIVI_CARPIHAT=` also disables it. Use the same
-setting when rebuilding images for signed OS updates.
-
-Outputs:
-
-```text
-output/pi4/images/livi-os-rpi4.img
-output/pi5/images/livi-os-rpi5.img
-```
-
-`make fetch-livi` (or `support/fetch-livi` with no arguments) defaults to
-`nightly`, matching the published ARM64 release and CI. Override it with
-`LIVI_CHANNEL=stable` for GitHub's latest non-prerelease (currently unavailable),
-or `LIVI_CHANNEL=<tag>` for a specific release. Run `make test-fetch-livi` to
-check release selection offline.
-
-`make fetch-livi` validates the AppImage type and AArch64 ELF machine and writes
-a local SHA-256 file. Both fetch and package installation reject payloads without
-the Rust/API-2 layout; the nightly download cannot be used until your app
-publishes that integration. You can instead supply the custom AppImage and its
-SHA-256 sidecar under `artifacts/`. `make check-livi` validates that local payload
-before a lengthy build. Start with a **fresh output tree** when migrating from
-Electron: Buildroot does not remove obsolete packages from incremental targets.
-For a reproducible production release, archive the exact
-AppImage and its hash rather than resolving the rolling nightly tag again.
-
-Validate both Buildroot defconfigs and shell syntax with:
-
-```sh
-make check
-make test-runtime
-```
-
-Recovery and payload tests require Python 3.11+, Bash, `jq`, `mksquashfs` and
-`unsquashfs` (the latter two come from `squashfs-tools`). `make check` resolves the
-x86-64 CI configuration on any host; it does not compile or boot an image.
-
-### Building on macOS / Apple Silicon
-
-Use Docker's Linux VM with x86-64 emulation for the Bootlin toolchain. Keep the
-Buildroot checkout and all compiled output on the Linux volume: macOS-generated
-host tools cannot run in Linux, and source builds require a case-sensitive
-filesystem. Do not reuse `output/` across different host operating systems.
-
-```sh
-docker build --platform linux/amd64 -t livi-build -f support/Dockerfile .
-docker volume create livi-build
-docker run --rm --platform linux/amd64 \
-  -v "$PWD:/workspace" -v livi-build:/build livi-build \
-  sh -ec 'make fetch-livi;
-          make pi4 BUILDROOT_DIR=/build/buildroot OUTPUT_BASE=/build/output'
-```
-
-Builds run as an unprivileged user and do not need privileged containers or host
-device access. The image is `/build/output/pi4/images/livi-os-rpi4.img` inside the
-volume. Preserve that volume to resume builds. Allow ample disk space for
-downloads, compiler output and the multi-gigabyte disk image; emulated x86-64
-compilation is significantly slower than native Linux.
-
-To limit compilation concurrency, pass `BR2_JLEVEL=4` to `make` rather than
-invoking the wrapper with `make -j4`. This leaves package-level parallelism to
-Buildroot and avoids passing an outer jobserver into Kconfig's recursive Make
-probes. The latter failed with `write jobserver: Bad file descriptor` during
-BusyBox configuration in the x86-64 container validation.
+Run `make check` and `make test-runtime` before building. These validate project
+configuration and host-side behavior; they do not compile or accept the image.
+For build prerequisites, compiler-cache details and the macOS/Docker commands,
+see the README.
 
 ### Pi 4 emulator smoke test
 
-With QEMU supporting `raspi4b`, export the Linux build's images to the host
-without mixing its compiled host tools into the macOS output tree:
+With QEMU support for `raspi4b`, the helper boots the built kernel and DTB with
+a disposable copy-on-write disk:
 
 ```sh
-docker create --name livi-export -v livi-build:/build:ro livi-build true
-mkdir -p output/pi4
-docker cp livi-export:/build/output/pi4/images output/pi4/
-docker rm livi-export
 ./support/qemu-pi4 output/pi4/images
 ```
 
-The test uses the built Pi 4 kernel and DTB with a disposable 8 GiB copy-on-write
-SD card, preserving the original image. It allows five minutes to observe the
-guest's `LIVI_QEMU_STORAGE_OK` marker after checking systemd's persistent-data
-setup, read-only SquashFS/FAT mounts, writable ext4 and first-boot data growth.
-The guest check runs only with `livi.qemu_test=1` on the kernel command line.
-A timeout or early emulator exit fails the test and preserves the serial log.
-The direct-DTB test selects the emulated PL011 console at `ttyAMA1` and disables
-systemd's runtime watchdog via `systemd.watchdog_sec=0`: initializing the
-emulated BCM watchdog reset QEMU before data setup completed. These overrides
-apply only to the emulator command line; the production watchdog stays enabled
-and must be checked on a real Pi.
-
-For a visible window at the panel's 1280×400 pixel size, run:
-
-```sh
-./support/qemu-pi4 --preview output/pi4/images
-```
-
-This selects Cocoa on macOS (GTK or SDL on Linux) and attaches generic USB
-keyboard and absolute-pointer tablet devices. After the storage check passes,
-the window stays open until closed or interrupted. The five-minute failure
-deadline still applies before that check passes. The framebuffer dimensions are
-not HDMI EDID/timing emulation; the tablet is not a Waveshare multitouch device.
-QEMU's Pi framebuffer does not implement the VC4/V3D DRM hardware required by
-the production Wayland kiosk, so a visible window may show only boot output or
-a blank framebuffer, not LIVI. A blank window is not an application test pass.
-No host microphone, USB phone, dongle or radio is passed through by this command.
-
-An interactive LIVI UI preview needs a separate generic ARM64 VM with a VirtIO
-GPU and software rendering; it is not a boot of this Buildroot image. For example,
-Ubuntu 24.04 ARM64 can run Sway with a custom 1280×400 output mode and launch LIVI
-with `LIVI_NO_COMPOSITOR=1`, `--disable-gpu` and `--disable-gpu-rasterization`.
-These are preview-only settings: they bypass LIVI's custom video compositor and
-do not validate the production VC4/V3D/projection path. Do not apply them to the
-Pi appliance. QEMU's bundled UEFI may assert on a 400-pixel-high boot console;
-boot the virtual GPU at 1280×800 and set 1280×400 in the guest compositor instead.
-Generic USB keyboard/tablet/audio devices and NAT networking can exercise guest
-input, sound routing and network clients, not Waveshare multitouch, Pi radios or
-CarPlay/Android Auto phone protocols.
-
-**This is a storage/boot smoke test, not a complete Raspberry Pi or LIVI acceptance
-test.** Direct kernel loading bypasses EEPROM/firmware and tryboot. QEMU cannot
-establish correct VC4/V3D acceleration, Waveshare HDMI timings/touch mapping,
-physical audio, Bluetooth/Wi-Fi, USB phone projection or MFi authentication.
-Do not relax kiosk health checks just to make an emulator report success.
+It preserves the source image and checks boot, read-only system partitions,
+persistent storage and first-boot data expansion. `--preview` opens a window,
+but QEMU does not emulate Pi graphics, the Waveshare panel, radios or phone
+projection. Treat this as a boot/storage test only; never weaken readiness
+checks to make the emulator pass.
 
 ### Pi 4 UART boot diagnostics
 
-Kernel modules are XZ-compressed. Both the build host's `depmod` and target
-module loader must support XZ; image validation rejects an empty or incompatible
-module dependency index. VC4's SoC-audio dependency is built in so Kconfig does
-not silently downgrade the display driver to a module.
+Connect a **3.3 V TTL** USB-UART adapter with the Pi powered off:
 
-Both board defconfigs enable `BR2_PACKAGE_XZ`, which enables target kmod's
-XZ support. `BR2_PACKAGE_HOST_KMOD_XZ` only affects the build host's tools.
-Without target support, compressed drivers such as HDMI's DDC I2C driver
-cannot load, leaving VC4 waiting for a dependency and the display black.
-For an existing build configured without target XZ support, rebuild kmod
-before assembling the image again (use `pi5` instead of `pi4` for Pi 5):
-
-```sh
-make pi4_defconfig
-make -C buildroot O="$PWD/output/pi4" kmod-dirclean
-make pi4
-```
-
-After flashing, `modprobe --version` must report `+XZ`.
-
-New Pi 4 builds enable the GPIO mini UART at **115200 baud, 8N1, no flow
-control** (`enable_uart=1`, `console=ttyS0,115200`). Bluetooth retains its
-PL011 UART; do not add `disable-bt` or `miniuart-bt` overlays to this setup.
-Enabling the mini UART fixes its clock through the Raspberry Pi firmware.
-Kernel informational messages are enabled for boot diagnostics. Password login
-remains disabled: this provides boot output, not a passwordless debug shell.
-
-With the Pi powered off, connect a **3.3 V TTL** USB-UART adapter (or Flipper
-Zero in GPIO USB-UART bridge mode):
-
-| Pi 4 physical header pin | Function | Adapter connection |
+| Pi 4 pin | Signal | Adapter |
 | --- | --- | --- |
 | 8 (BCM14) | TX | RX |
 | 10 (BCM15) | RX | TX |
 | 6 | Ground | Ground |
 
-Do not connect adapter 5 V/3.3 V power pins, use an RS-232 adapter, or connect
-UART to the CAN port. Confirm the HAT leaves BCM14/15 free before connecting
-through a stacked header. Power the Pi normally, connect the adapter to the
-computer, and start serial capture before powering on the Pi.
-
-These changes apply to the next image build, not an already flashed SD card.
-The boot-file compatibility checks require an OS rebuild; editing boot files
-on an existing appliance is not a production update.
+Use 115200 baud, 8N1. Do not connect adapter power pins, use RS-232, or confuse
+UART with the CAN connector. Confirm the HAT leaves BCM14/15 free. This provides
+boot output only; it does not enable a login shell.
 
 ### Appliance security profile
 
-Root and LIVI password logins are disabled; there is no shared factory console
-password. Recovery requires trusted physical media access or a deliberately
-provisioned development image. This is not Raspberry Pi secure boot and does not
-protect against an attacker who can replace the boot media.
+There is no shared password or root login. SSH is off by default; the
+[README procedure](../README.md#debugging-over-ssh) enables key-only access for
+`livi`. The OS is not secure boot: anyone who can replace or edit the SD card
+can alter the system.
 
-SSH is off by default; see [Debugging over SSH](../README.md#debugging-over-ssh)
-for how to turn it on.
+The supervisor and configuration guard run unprivileged. The app can call only
+immutable, narrowly scoped OS helpers; writable AppImage helpers and arbitrary
+commands are not granted sudo. Helper/API details are in the
+[AppImage contract](rust-appimage-contract.md). Changes to helpers, udev rules
+or system services require an OS update. AppImage updates are not signed by the
+OS, so rollback protects availability, not authenticity.
 
-SSH permits only the configured keys for the `livi` account; SSH password/root
-login and all forwarding are disabled. A per-build random password hash (with its
-plaintext discarded) lets OpenSSH accept public-key authentication for the
-otherwise locked account. Keep the Pi on a trusted LAN and do not forward port
-22 from the internet. Anyone who can write the SD card can enable SSH this way,
-which grants no more than the physical access described above already does.
-The host key is generated on first boot and stored on the writable data partition.
-
-The application supervisor, logger and configuration guard run as `livi`, not
-root, so writable AppImage/configuration paths cannot turn their file operations
-into privileged writes. Native API-2 LIVI starts the immutable
-`/usr/libexec/livi-helperd` with `sudo -n`, no arguments and a command-scoped
-environment allowlist. Only its Wi-Fi teardown switch, exact stale-helper
-cleanup patterns, AP service controls, CAN capture, fixed OBD-II worker,
-OS-update and power helpers, and boot-health commands
-are additionally permitted. Installer switches, arbitrary commands and writable
-helpers are not authorized, and there is no `SETENV` permission.
-The power helper accepts only `poweroff` or `reboot`, refuses while an OS update
-is running, and queues an orderly systemd shutdown/reset. The app's System power
-pages require a confirmation click and report helper failures without closing
-the app. A new OS image is needed to bootstrap this helper on older installations.
-Helper code changes
-require an OS update, independently of writable AppImage updates.
-The OS also installs the factory AppImage's canonical USB allowlist and
-dual-interface touchscreen filter; a writable app update cannot install a new
-udev policy without an OS update.
-
-The ARM64 AppImage must include the matching launcher integration from the LIVI
-app repository and declare helper API `2` in `resources/livi-os-helper-api`.
-See the [complete Rust app contract](rust-appimage-contract.md), including
-wireless service integration, helper lifeline and readiness reporting.
-The obsolete five-argument projection wrapper is not the native API-2 interface.
-The payload must also declare display API `1` in
-`resources/livi-os-display-api`. This prevents older helper-compatible nightlies
-that ignore the Waveshare rotation request from being built into this appliance.
-The appliance requests `LIVI_GST_HEVC_LEGACY_SLICE=1` for the pinned 6.12
-HEVC driver. Its slice-length ABI differs from the newer GStreamer backport;
-matching it restored smooth hardware-decoded Android Auto video. The app
-launcher supplies the same default for app-only updates on older images, and
-the media bundle must include the matching compatibility patch.
-Fresh appliance configurations use 140 projection DPI so Android Auto controls
-fit the 1280x400 panel. Change it in Settings > Video > Main Video > DPI;
-existing saved settings are preserved.
-Image creation rejects older payloads; there is no Electron compatibility mode.
-The factory payload is checksum-checked at installation and reinstalled when its
-file/checksum changes during an incremental build.
-It is excluded from ELF stripping, which would discard the appended AppImage
-filesystem. Post-build validation verifies the installed payload's checksum
-after target finalization and checks keyboard layout data and Rust runtime libraries.
-
-Fresh installations seed a random 32-character Wi-Fi password, Canadian
-regulatory country (`CA`), and a 1280×400 main kiosk window for the confirmed
-Waveshare panel. Set the correct country in LIVI before operating elsewhere. Existing
-configuration and last-known-good backups are preserved; change legacy/default
-passwords in LIVI's Wi-Fi settings. GTK/NSS/CUPS and Chromium namespace/sandbox
-launch logic have been removed. These are hardening measures, not a security certification:
-unsigned upstream AppImage updates and the privileged helper's broader interfaces
-still require review before production deployment.
+Fresh installs seed a random Wi-Fi password, country `CA` and the Waveshare
+display defaults. Set the correct regulatory country in LIVI. These measures
+are hardening, not a security certification.
 
 ## Continuous integration and releases
 
@@ -463,111 +184,46 @@ Order) before relying on NVMe. The image enables the Pi 5 PCIe controller in
 `config.txt`; a standards-compliant HAT+ remains recommended. PCIe Gen 2 is kept
 at the supported default.
 
-### Waveshare 7.9inch HDMI LCD
+### Display
 
-Both images target the [Waveshare 7.9inch HDMI LCD](https://www.waveshare.com/wiki/7.9inch_HDMI_LCD)
-with HDMI video and five-point USB capacitive touch. Connect the LCD's HDMI
-input to the Pi's HDMI0 port (`HDMI-A-1`, nearest the USB-C power connector),
-and its TOUCH port to a Pi USB port before powering on.
-
-The desktop is **1280×400 landscape**. HDMI still scans out the panel's native
-400×1280 mode; the API-2 Rust compositor must apply the requested 90° output
-transform at startup and after reconnection, map USB touch to `HDMI-A-1` with the
-same transform, and keep HDMI1 disabled. Do not add a second libinput
-calibration rotation. This is a custom-app requirement, not an upstream guarantee.
-The console uses `fbcon=rotate:1` independently of the application.
-
-On a fresh data partition, LIVI's main projection and instrument-cluster
-stream default to **1280×400**. The cluster map can therefore extend behind
-the gauges rather than being confined to a centered 16:9 image. Android Auto
-may still transmit a standard 1280×720 video frame with margins. Existing
-configuration and last-known-good backups are preserved; change the projection
-and cluster dimensions in LIVI if a different display is used.
-
-Both Pi images use full KMS and the panel's EDID for detailed timings. The wiki's
-legacy `hdmi_group`, `hdmi_mode` and `hdmi_timings` settings are not used. Connect
-HDMI and USB before boot; if the native mode is missing, inspect the EDID and
-cable rather than substituting generic CVT timings. The previous DSI panel
-configuration and automatic DSI detection are disabled.
-
-The startup health check verifies the compositor's active native mode, 90°
-transform and scale, plus the PipeWire/PulseAudio sockets and a live connection
-to LIVI's internal compositor. These checks continue after startup so a dead
-internal compositor cannot leave an apparently healthy black screen. Verify all
-four touch corners on the physical panel before installation.
+The target panel is the Waveshare 7.9-inch HDMI/USB-touch display. Its native
+scanout is 400×1280; the app rotates it to a 1280×400 landscape desktop and
+applies the same transform to touch. Connect to HDMI0 and USB TOUCH. See the
+[hardware guide](hardware-setup-pi5.md) for setup and physical acceptance.
 
 ### Haltech CAN V2 telemetry
 
-Both Pi images configure `can0` at 1 Mbit/s, listen-only, when the device
-appears. Capture verifies the interface state and forwards RPM, speed, battery,
-coolant, oil pressure, lambda and both knock levels to the updated LIVI app.
-Build both the updated AppImage and OS; an app update alone cannot expand the
-old OS capture filter.
-
-For HAT CAN, set `LIVI_CAN_OSCILLATOR=16000000` or `20000000` **only to match
-the actual crystal**. The build adds SPI0 CS0/MCP2515 configuration on either
-Pi, keeping BCM7 free for reverse sensing. Empty (default) leaves SPI CAN off
-and supports a compatible `gs_usb` adapter as `can0`. The older 8 MHz
-CarPiHAT cannot receive this 1 Mbit/s broadcast. Its 8 MHz clock can instead
-be used for the optional OBD-II backend on a verified 500 kbit/s bus below.
-See the [Haltech CAN guide](HALTECH-CAN.md) for Elite 2500 auxiliary-port
-setup, wiring, termination and acceptance checks. Hardware clock identification
-and real-bus commissioning remain required; QEMU cannot verify them.
+See the [Haltech CAN guide](HALTECH-CAN.md) for supported hardware, clock
+configuration, wiring and commissioning. V2 capture is 1 Mbit/s listen-only;
+identify the HAT crystal before enabling its MCP2515 overlay.
 
 ### Optional Haltech OBD-II polling
 
-The updated app can select **Settings > Car > CAN Telemetry > CAN backend >
-Haltech OBD-II**. This is a separate **active**, read-only Service 01 backend,
-not the Haltech V2 receiver. Select the verified bus bitrate (500 kbit/s or
-1 Mbit/s), acknowledge that wiring/bitrate/ECU assignment have been validated,
-then switch on **Enable CAN telemetry**. It is off by default. Changing the
-bitrate clears the acknowledgement until it is confirmed again.
-
-Build a physical 8 MHz HAT with `LIVI_CAN_OSCILLATOR=8000000` only for an
-actually confirmed 500 kbit/s OBD-II connection. This does **not** make its
-1 Mbit/s Haltech V2 capture work. The Elite auxiliary Vehicle CAN's OBD-II
-bitrate remains installation-specific/unverified; use a compatible USB CAN
-adapter if the ECU requires 1 Mbit/s.
-
-The immutable worker permits only twelve live-data PIDs and three capability
-bitmaps, at most ten requests/second, with one outstanding request. No ECU
-writes, actuator controls, arbitrary IDs or application-supplied payloads are
-accepted. It stops on app disconnect/disable and leaves `can0` down. Passive
-and OBD backends have exclusive ownership; ignition handling is unchanged.
-See [OBD-II setup and limits](HALTECH-CAN.md#7-optional-elite-obd-ii-backend).
+OBD-II is a separate active, read-only Service 01 backend. It is disabled until
+the user selects it, verifies the bus and acknowledges the setup. See the
+[OBD-II section](HALTECH-CAN.md#7-optional-elite-obd-ii-backend) for its
+limits and commissioning procedure.
 
 ## Disk layout and power-loss behaviour
 
 ### CarPiHAT ignition control
 
-With the default `LIVI_CARPIHAT=1`, firmware asserts BCM25 at startup and the
-built-in `gpio-poweroff` driver holds the power latch until final poweroff.
-`livi-carpihat-power.service` monitors the HAT's conditioned BCM12 ignition input,
-starting before `sysinit.target`. After ten continuous seconds of ignition off,
-it requests an orderly systemd poweroff; ignition returning during that countdown
-cancels it. The kernel releases the latch only after shutdown, not when the
-monitor stops or restarts.
+By default, the HAT holds power until shutdown completes. Its BCM12 ignition
+input requests shutdown after ten seconds off; ignition returning during the
+countdown cancels it. Keep permanent power and ACC separate. See the
+[wiring and commissioning guide](hardware-setup-pi5.md#carpihat--wire-power-and-ignition).
 
-Keep the HAT on protected permanent +12V, with ACC/IGN connected separately.
-Once shutdown has started, allow it to finish; restarting may require an
-ignition off/on cycle. See the [power wiring and commissioning checks](hardware-setup-pi5.md#carpihat--wire-power-and-ignition).
-GPIO discovery uses line names and the kernel-owned latch, not a fixed gpiochip
-number, so it accommodates both Pi 4 and Pi 5. GPIO failures are logged to the
-journal and leave the latch held rather than cutting power unexpectedly.
-
-| Partition | Filesystem | Normal mount | Purpose |
-|---|---|---|---|
-| `LIVI_BOOT` | FAT32, 256 MiB | `/boot` read-only | Firmware, DTBs, kernel |
-| root A | SquashFS | `/` read-only when active | Immutable Buildroot OS slot A |
-| root B | SquashFS | `/` read-only when active | Immutable Buildroot OS slot B |
-| `LIVI_DATA` | ext4, initially 2 GiB | `/data` read-write | Updates, config, pairing, ROMs, saves, logs |
+| Partition | Size / filesystem | Purpose |
+|---|---|---|
+| 1 `LIVI_BTCTL` | 64 MiB FAT | Boot selection and optional SSH key |
+| 2–3 boot A/B | 128 MiB FAT each | Firmware, DTBs and kernel |
+| 4–5 root A/B | 1536 MiB SquashFS each | Read-only OS slots |
+| 6 `LIVI_DATA` | 2 GiB ext4, grows to fill media | App, settings, music, games and logs |
 
 The data filesystem uses journaling, barriers, `noatime`, a five-second commit
-interval, and `errors=remount-ro`. `/run`, `/tmp`, and `/var/log` are tmpfs. On
-the first boot, `livi-data-grow` extends the final data partition over unused SD
-or NVMe capacity and grows ext4 online. It saves the pre-change GPT dump in
-`/run`, updates only the known final partition, and records `/data/.expanded`
-after `resize2fs` and `sync` complete.
+interval and `errors=remount-ro`; `/run`, `/tmp` and `/var/log` are tmpfs. On
+first boot, the final data partition and filesystem grow to use remaining card
+or NVMe capacity.
 
 Important persistent paths:
 
@@ -589,46 +245,20 @@ Important persistent paths:
 /data/etc/NetworkManager/conf.d/
 ```
 
-LIVI-required mutable system configuration (`/etc/bluetooth`, NetworkManager
-profiles, LIVI udev rules and locally generated systemd units) is bind-mounted
-from `/data`. NetworkManager's AP ownership drop-in directory is also writable
-and migrated; wired iPhone lockdown pairing records persist in a root-only
-`/data/lockdown` bind mount. Factory configuration is migrated before mounting: untouched
-files follow new defaults, obsolete untouched files are removed, and local edits
-or deletions are preserved. The baseline is stored under `/data/etc-defaults`.
-Conflicting new defaults are saved under each directory's `incoming/<revision>`
-folder and listed in `conflicts.json`. Review these conflicts during OS upgrades.
-Legacy installations without a baseline retain their existing files and receive
-conflict proposals instead of having potentially customized files overwritten.
-The same migration supports returning to an older OS's defaults after rollback.
+Mutable Bluetooth, NetworkManager, udev and service configuration persists under
+`/data`. OS upgrades migrate unmodified factory defaults while preserving local
+edits; conflicting defaults are saved under `incoming/<revision>` and listed in
+`conflicts.json`. Wired iPhone pairing records are stored root-only.
 
-## Clock and time sync
-
-LIVI's sunrise/sunset night mode needs a correct wall clock, and only switches
-day/night once the clock is confirmed by an RTC or NTP.
+## Clock
 
 | Board | Time source at boot | Notes |
 |---|---|---|
-| Pi 5 | On-board RTC (`rtc0`) via kernel `hctosys` | Needs the RTC backup battery; without it the RTC resets on power-off |
-| Pi 4 | Last synced time from `systemd-timesyncd` | No RTC; time is stale until NTP syncs over Wi-Fi/hotspot |
+| Pi 5 | On-board RTC | Install its backup battery. Charging is off by default; only enable it for a rechargeable ML-2020, never a CR2032. |
+| Pi 4 | Last time saved by `systemd-timesyncd` | No RTC; network time is needed after a cold start. |
 
-- The kernel restores system time from the RTC at boot (`CONFIG_RTC_HCTOSYS`)
-  and writes NTP-synced time back to it (`CONFIG_RTC_SYSTOHC`).
-- `systemd-timesyncd` syncs via NTP whenever a network is available. Its state
-  (`/var/lib/systemd/timesync`) is bind-mounted from `/data/timesync`.
-- Pi 5 battery charging is off by default. With the official rechargeable
-  ML-2020 battery, uncomment `dtparam=rtc_bbat_vchg=3000000` in
-  `board/drskunk/livi/config-rpi5.txt`. Never charge a CR2032.
-- Pi 4 test rig: either keep Wi-Fi up for NTP or pick Day/Night manually in
-  LIVI. An optional DS3231 module can be enabled in `config-rpi4.txt`.
-
-Check on the device:
-
-```sh
-timedatectl                       # "System clock synchronized: yes"
-cat /sys/class/rtc/rtc0/since_epoch
-ls /run/systemd/timesync/synchronized
-```
+Both use NTP when connected. The clock must be synchronized before sunrise/sunset
+night mode can operate reliably.
 
 ## LIVI updates and rollback
 

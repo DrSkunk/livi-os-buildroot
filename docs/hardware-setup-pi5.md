@@ -1,4 +1,4 @@
-# LIVI Pi 5 quick-start
+# LIVI Pi 5 hardware setup
 
 **Flash the card → connect two screen cables → power on → add your extras.**
 
@@ -444,17 +444,6 @@ brings `can0` down. Ignition shutdown is unaffected. Oil pressure and knock
 levels are not included in this standard OBD-II subset.
 See the [detailed Haltech guide](./HALTECH-CAN.md) for adapter selection,
 termination and receive diagnostics.
-
-## Photos to finish this guide
-
-The illustrations above are diagrams, not photographs of a completed build.
-For annotated assembly photos, collect:
-
-- Screen rear with included connectors and both cable ends visible.
-- Compact stack side view showing **10/11 mm M2.5** spacing and fan clearance.
-- Remote layout with extender **pin 1** visible at both ends.
-- Main-loom pigtail in the same orientation as the supplier drawing.
-- Cubilux → MiniDSP optical connection.
 
 ## More help
 

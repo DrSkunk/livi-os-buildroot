@@ -8,9 +8,6 @@ The system is read-only and updates itself with A/B slots, so a bad update or a
 power cut cannot brick it. Your settings, music and games live on a separate
 data partition.
 
-> **Status:** built for a Pi 4 or Pi 5 with the Waveshare 7.9" HDMI touch screen.
-> Still being tested on real hardware, so don't rely on it in a car yet.
-
 ## Install
 
 1. Download the image for your board from the
@@ -18,7 +15,8 @@ data partition.
    `livi-os-rpi4.img.xz` or `livi-os-rpi5.img.xz`.
 2. Flash it with [Raspberry Pi Imager](https://www.raspberrypi.com/software/)
    (**Choose OS → Use custom**, skip OS customisation) to a card of at least 8 GB.
-   The Pi 5 image also works on NVMe.
+   The Pi 5 image also works on NVMe if NVMe boot is enabled in the Pi EEPROM
+   (see [the technical reference](docs/technical-reference.md#pi-5-nvme-boot)).
 3. Connect the screen's HDMI to **HDMI0** (next to the power socket) and its
    touch cable to USB, then power on.
 
@@ -34,7 +32,8 @@ For wiring, mounting and the CarPiHAT power board, see the
   Android Auto. LIVI's hotspot gets a random password on first boot; you can
   see and change it in LIVI's Wi-Fi settings.
 - **Clock:** the Pi 5 keeps time with its RTC battery. The Pi 4 has no clock, so
-  it needs Wi-Fi for the correct time (used for automatic night mode).
+  it needs a network connection for the correct time (used for automatic night
+  mode).
 
 ## Music
 
@@ -114,6 +113,9 @@ scp -i ~/.ssh/livi-debug -r ~/Music/Album livi@livi.local:/data/livi/music/
 scp -i ~/.ssh/livi-debug game.gba livi@livi.local:/data/games/roms/
 ```
 
+On SSH-enabled images built before the SFTP fix, add `-O` to each `scp`
+command.
+
 You log in as `livi`. That account can read logs and write anywhere under
 `/data/livi` and `/data/games`. It can't get root; the OS is read-only by design.
 
@@ -132,7 +134,8 @@ to take a few hours.
 
 ```sh
 make bootstrap
-make fetch-livi        # downloads the LIVI nightly AppImage
+# Provide an API-2 AppImage and matching .sha256 file under artifacts/
+make check-livi
 make pi4               # or: make pi5
 ```
 
@@ -147,12 +150,18 @@ On macOS, build inside Docker:
 docker build --platform linux/amd64 -t livi-build -f support/Dockerfile .
 docker volume create livi-build
 docker run --rm --platform linux/amd64 -v "$PWD:/workspace" -v livi-build:/build livi-build \
-  sh -ec 'make fetch-livi; make pi4 BUILDROOT_DIR=/build/buildroot OUTPUT_BASE=/build/output'
+  sh -ec 'make check-livi; make pi4 BUILDROOT_DIR=/build/buildroot OUTPUT_BASE=/build/output'
 ```
 
-Build options: `LIVI_CARPIHAT=0` for a bench setup without the CarPiHAT, and
-`LIVI_CAN_OSCILLATOR=16000000` (or `20000000`/`8000000`) to match a CAN HAT's
-crystal.
+The source expects a custom Rust AppImage implementing LIVI OS API 2. A public
+nightly may not meet that contract; `make fetch-livi` downloads it but
+`make check-livi` rejects incompatible payloads. Place the compatible
+`LIVI-arm64.AppImage` and its `LIVI-arm64.AppImage.sha256` sidecar in `artifacts/`.
+See the [AppImage contract](docs/rust-appimage-contract.md).
+
+Build options: `LIVI_CARPIHAT=0` for a bench setup without the CarPiHAT.
+Only set `LIVI_CAN_OSCILLATOR` to the crystal fitted to the HAT; CAN setup is
+described in the [Haltech guide](docs/HALTECH-CAN.md).
 
 ## More docs
 
