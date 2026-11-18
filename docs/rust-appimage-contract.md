@@ -35,7 +35,7 @@ Ship these regular executable Linux AArch64 ELF files:
 livi-ui
 resources/core/livi-core
 resources/compositor/livi-compositor
-resources/gst-host/livi-gst-host
+resources/output/livi-output
 resources/driver/livi-helperd
 ```
 

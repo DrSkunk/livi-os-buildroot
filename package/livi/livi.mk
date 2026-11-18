@@ -19,7 +19,7 @@ define LIVI_INSTALL_TARGET_CMDS
 	rm -rf $(@D)/factory
 	offset=`$(HOST_DIR)/bin/python3 -c 'import struct, sys; f = open(sys.argv[1], "rb"); h = f.read(64); assert h[:5] == b"\x7fELF\x02" and h[5] == 1; print(struct.unpack_from("<Q", h, 40)[0] + struct.unpack_from("<H", h, 58)[0] * struct.unpack_from("<H", h, 60)[0])' "$(LIVI_APPIMAGE)"`; \
 		$(HOST_DIR)/bin/unsquashfs -no-progress -d $(@D)/factory -o "$$offset" "$(LIVI_APPIMAGE)" \
-		resources/driver resources/core resources/compositor resources/gst-host livi-ui \
+		resources/driver resources/core resources/compositor resources/output livi-ui \
 		resources/livi-os-helper-api resources/99-LIVI.rules.template resources/livi-touch-filter \
 		resources/livi-wifi-ap.service.template resources/livi-os-display-api
 	test -f $(@D)/factory/resources/livi-os-helper-api && \
