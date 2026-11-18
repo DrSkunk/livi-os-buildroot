@@ -158,7 +158,8 @@ and the corresponding `-KILL` invocation, never an arbitrary process pattern.
 
 The image renders the factory AppImage's Wi-Fi AP unit to
 `/etc/systemd/system/livi-wifi-ap.service`, replacing its helper path with
-`/usr/libexec/livi-helperd` and username with `livi`. The unit is not enabled
+`/usr/libexec/livi-helperd`, username with `livi` and user data with
+`/data/livi/config/LIVI`. The unit is not enabled
 by default. It requires and follows `livi-data-setup.service` so persisted
 configuration is mounted before a dedicated AP starts at boot.
 The app may start, stop, restart, enable or disable only this AP unit.

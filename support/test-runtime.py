@@ -339,9 +339,10 @@ class ProjectionPrivilegeBoundary(unittest.TestCase):
                 "[Unit]\nAfter=network.target\n"
                 "ConditionPathExists=/usr/local/sbin/livi-helperd\n"
                 "[Service]\nEnvironment=SUDO_USER=__USERNAME__\n"
+                'Environment="LIVI_USER_DATA=__USER_DATA__"\n'
                 "ExecStartPre=/usr/local/sbin/livi-helperd --wifi-ap-claim\n"
                 "ExecStart=/usr/local/sbin/livi-helperd --wifi-ap\n"
-                "ExecStop=/usr/local/sbin/livi-helperd --wifi-ap-teardown\n"
+                "ExecStopPost=/usr/local/sbin/livi-helperd --wifi-ap-teardown\n"
             )
             target = path / "target/etc/systemd/system"
             target.mkdir(parents=True)
@@ -350,9 +351,11 @@ class ProjectionPrivilegeBoundary(unittest.TestCase):
             result = subprocess.run(["sh", "-c", render], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             rendered = (target / "livi-wifi-ap.service").read_text()
-            self.assertNotIn("__USERNAME__", rendered)
+            self.assertNotIn("__", rendered)
             self.assertNotIn("/usr/local/sbin", rendered)
             for setting in ("Environment=SUDO_USER=livi",
+                            'Environment="LIVI_USER_DATA=/data/livi/config/LIVI"',
+                            "ExecStopPost=/usr/libexec/livi-helperd --wifi-ap-teardown",
                             "Requires=livi-data-setup.service",
                             "After=livi-data-setup.service",
                             "ExecStart=/usr/libexec/livi-helperd --wifi-ap"):
@@ -1730,9 +1733,10 @@ class CarPiHATPostBuild(unittest.TestCase):
         (self.target / "etc/systemd/system/livi-wifi-ap.service").write_text(
             "[Unit]\nRequires=livi-data-setup.service\nAfter=livi-data-setup.service\n"
             "[Service]\nEnvironment=SUDO_USER=livi\n"
+            'Environment="LIVI_USER_DATA=/data/livi/config/LIVI"\n'
             "ExecStartPre=/usr/libexec/livi-helperd --wifi-ap-claim\n"
             "ExecStart=/usr/libexec/livi-helperd --wifi-ap\n"
-            "ExecStop=/usr/libexec/livi-helperd --wifi-ap-teardown\n"
+            "ExecStopPost=/usr/libexec/livi-helperd --wifi-ap-teardown\n"
         )
         self.binding = self.target / "usr/lib/python3.14/site-packages/gpiod.so"
         self.binding.parent.mkdir(parents=True)

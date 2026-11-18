@@ -76,11 +76,12 @@ fi
 ap_unit="$TARGET/etc/systemd/system/livi-wifi-ap.service"
 for setting in \
   'Environment=SUDO_USER=livi' \
+  'Environment="LIVI_USER_DATA=/data/livi/config/LIVI"' \
   'Requires=livi-data-setup.service' \
   'After=livi-data-setup.service' \
   'ExecStartPre=/usr/libexec/livi-helperd --wifi-ap-claim' \
   'ExecStart=/usr/libexec/livi-helperd --wifi-ap' \
-  'ExecStop=/usr/libexec/livi-helperd --wifi-ap-teardown'; do
+  'ExecStopPost=/usr/libexec/livi-helperd --wifi-ap-teardown'; do
   grep -qx "$setting" "$ap_unit" || {
     echo "Missing native projection AP setting: $setting" >&2
     exit 1

@@ -33,7 +33,8 @@ define LIVI_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/factory/resources/driver/livi-helperd $(TARGET_DIR)/usr/libexec/livi-helperd
 	mkdir -p $(TARGET_DIR)/etc/systemd/system
 	sed -e 's|/usr/local/sbin/livi-helperd|/usr/libexec/livi-helperd|g' \
-		-e 's/__USERNAME__/livi/g' $(@D)/factory/resources/livi-wifi-ap.service.template | \
+		-e 's/__USERNAME__/livi/g' -e 's|__USER_DATA__|/data/livi/config/LIVI|g' \
+		$(@D)/factory/resources/livi-wifi-ap.service.template | \
 		awk '/^\[Unit\]$$/ { print; print "Requires=livi-data-setup.service"; print "After=livi-data-setup.service"; next } { print }' \
 		> $(TARGET_DIR)/etc/systemd/system/livi-wifi-ap.service
 	chmod 0644 $(TARGET_DIR)/etc/systemd/system/livi-wifi-ap.service
