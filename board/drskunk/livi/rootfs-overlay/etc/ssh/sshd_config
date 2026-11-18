@@ -21,5 +21,6 @@ X11Forwarding no
 PermitTunnel no
 PermitUserEnvironment no
 PermitTTY yes
+Subsystem sftp internal-sftp
 StrictModes yes
 LogLevel VERBOSE
