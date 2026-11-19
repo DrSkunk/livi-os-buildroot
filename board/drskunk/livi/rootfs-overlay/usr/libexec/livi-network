@@ -1,0 +1,421 @@
+#!/usr/bin/env python3
+"""Restricted NetworkManager interface for the LIVI settings page."""
+
+import datetime
+import io
+import json
+import os
+import re
+import select
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+
+NMCLI = "/usr/bin/nmcli"
+SYSTEMCTL = "/usr/bin/systemctl"
+TIMEDATECTL = "/usr/bin/timedatectl"
+WIFI_AP_UNIT = "livi-wifi-ap.service"
+UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+MAX_SSID_BYTES = 32
+MAX_REQUEST_BYTES = 4096
+
+
+class HelperError(Exception):
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
+class UsageError(HelperError):
+    pass
+
+
+def run(command, input_text=None, timeout=5):
+    try:
+        options = {
+            "check": False,
+            "capture_output": True,
+            "text": True,
+            "timeout": timeout,
+            "env": {"LC_ALL": "C", "PATH": "/usr/sbin:/usr/bin:/sbin:/bin"},
+        }
+        if input_text is None:
+            options["stdin"] = subprocess.DEVNULL
+        else:
+            options["input"] = input_text
+        return subprocess.run(command, **options)
+    except subprocess.TimeoutExpired as error:
+        raise HelperError("timeout", f"{command[0]} timed out") from error
+    except OSError as error:
+        raise HelperError("unavailable", f"cannot run {command[0]}: {error}") from error
+
+
+def nmcli(arguments, input_text=None, timeout=5, ok_codes=(0,)):
+    result = run([NMCLI, *arguments], input_text=input_text, timeout=timeout)
+    if result.returncode not in ok_codes:
+        message = result.stderr.strip() or result.stdout.strip() or "NetworkManager command failed"
+        if any(phrase in message.casefold() for phrase in
+               ("unknown connection", "no such connection", "connection not found")):
+            raise HelperError("not-found", message[:512])
+        raise HelperError("nmcli", message[:512])
+    return result
+
+
+def split_terse_row(line):
+    fields = []
+    field = []
+    escaped = False
+    for char in line:
+        if escaped:
+            field.append({"n": "\n", "r": "\r", "t": "\t"}.get(char, char))
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == ":":
+            fields.append("".join(field))
+            field.clear()
+        else:
+            field.append(char)
+    if escaped:
+        field.append("\\")
+    fields.append("".join(field))
+    return fields
+
+
+def terse_rows(output):
+    return [split_terse_row(line) for line in output.splitlines() if line]
+
+
+def property_rows(output):
+    result = {}
+    for line in output.splitlines():
+        name, separator, value = line.partition(":")
+        if separator:
+            result.setdefault(name, []).append(value.lstrip())
+    return result
+
+
+def checked_value(arguments, timeout=5):
+    return nmcli(["--terse", "--escape", "yes", *arguments], timeout=timeout).stdout.rstrip("\n")
+
+
+def device_rows():
+    output = checked_value([
+        "--fields", "DEVICE,TYPE,STATE,CONNECTION", "device", "status",
+    ])
+    rows = []
+    for row in terse_rows(output):
+        if len(row) != 4 or not row[0] or row[0] == "DEVICE":
+            continue
+        rows.append({
+            "device": row[0],
+            "type": row[1],
+            "state": row[2],
+            "connection": row[3] if row[3] not in ("", "--") else None,
+        })
+    return rows
+
+
+def wifi_devices():
+    return [device for device in device_rows() if device["type"] == "wifi"
+            and device["state"] != "unmanaged"]
+
+
+def projection_ap_active():
+    result = run([SYSTEMCTL, "is-active", "--quiet", WIFI_AP_UNIT], timeout=3)
+    if result.returncode == 0:
+        return True
+    if result.returncode == 3:
+        return False
+    message = result.stderr.strip() or "cannot read projection access point status"
+    raise HelperError("unavailable", message[:512])
+
+
+def wifi_profiles():
+    output = checked_value([
+        "--fields", "UUID,NAME,TYPE,AUTOCONNECT", "connection", "show",
+    ])
+    profiles = []
+    for row in terse_rows(output):
+        if len(row) != 4 or row[2] not in ("wifi", "802-11-wireless") or not UUID_RE.fullmatch(row[0]):
+            continue
+        details = terse_rows(checked_value([
+            "--get-values", "802-11-wireless.ssid", "connection", "show", "uuid", row[0],
+        ]))
+        if len(details) != 1 or len(details[0]) != 1:
+            raise HelperError("unavailable", "NetworkManager returned invalid Wi-Fi profile details")
+        profiles.append({
+            "uuid": row[0],
+            "name": row[1],
+            "ssid": details[0][0],
+            "autoconnect": row[3].lower() in ("yes", "true"),
+        })
+    return profiles
+
+
+def device_addresses(device):
+    output = checked_value([
+        "--fields", "IP4.ADDRESS,IP4.GATEWAY", "device", "show", device,
+    ])
+    values = property_rows(output)
+    addresses = [
+        value for key, entries in values.items() if key.startswith("IP4.ADDRESS")
+        for value in entries
+    ]
+    gateways = values.get("IP4.GATEWAY", [])
+    return [address for address in addresses if address], next(
+        (gateway for gateway in gateways if gateway), None
+    )
+
+
+def clock_status():
+    result = run([
+        TIMEDATECTL, "show", "--property=NTPSynchronized",
+    ], timeout=3)
+    if result.returncode != 0:
+        message = result.stderr.strip() or "cannot read system clock status"
+        raise HelperError("unavailable", message[:512])
+    values = dict(
+        line.split("=", 1) for line in result.stdout.splitlines() if "=" in line
+    )
+    return {
+        "synchronized": values.get("NTPSynchronized") == "yes",
+        "rtc": Path("/dev/rtc0").exists(),
+        "utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "server": None,
+    }
+
+
+def status():
+    general = terse_rows(checked_value([
+        "--fields", "STATE,CONNECTIVITY", "general", "status",
+    ]))
+    if not general or len(general[0]) != 2:
+        raise HelperError("unavailable", "NetworkManager returned invalid general status")
+    devices = device_rows()
+    for device in devices:
+        device["ipv4"], device["gateway"] = device_addresses(device["device"])
+    return {
+        "ok": True,
+        "state": general[0][0],
+        "connectivity": general[0][1],
+        "devices": devices,
+        "projection_ap": projection_ap_active(),
+        "wifi_profiles": wifi_profiles(),
+        "clock": clock_status(),
+    }
+
+
+def require_wifi_device():
+    devices = wifi_devices()
+    if devices:
+        return devices[0]["device"]
+    if projection_ap_active():
+        raise HelperError("projection-ap", "Wi-Fi is in use by wireless CarPlay/Android Auto")
+    raise HelperError("no-wifi", "no NetworkManager-managed Wi-Fi interface is available")
+
+
+def profile_ssids():
+    return {profile["ssid"] for profile in wifi_profiles() if profile["ssid"]}
+
+
+def scan():
+    saved = profile_ssids()
+    networks = {}
+    for device in wifi_devices():
+        output = nmcli([
+            "--wait", "30", "--terse", "--escape", "yes",
+            "--fields", "SSID,SIGNAL,SECURITY,IN-USE",
+            "device", "wifi", "list", "--rescan", "yes", "ifname", device["device"],
+        ], timeout=35).stdout
+        for row in terse_rows(output):
+            if len(row) != 4 or not row[0]:
+                continue
+            try:
+                signal = max(0, min(100, int(row[1])))
+            except ValueError:
+                signal = 0
+            network = {
+                "ssid": row[0],
+                "signal": signal,
+                "security": row[2],
+                "in_use": row[3] == "*",
+                "saved": row[0] in saved,
+            }
+            current = networks.get(row[0])
+            if current is None:
+                networks[row[0]] = network
+            else:
+                was_in_use = current["in_use"] or network["in_use"]
+                if network["signal"] > current["signal"]:
+                    networks[row[0]] = network
+                networks[row[0]]["in_use"] = was_in_use
+    ordered = sorted(networks.values(), key=lambda item: (-item["signal"], item["ssid"].casefold()))
+    return {"ok": True, "networks": ordered}
+
+
+def read_join_request():
+    try:
+        try:
+            fd = sys.stdin.fileno()
+        except (AttributeError, io.UnsupportedOperation):
+            raw = sys.stdin.read(MAX_REQUEST_BYTES + 1)
+        else:
+            deadline = time.monotonic() + 5
+            data = bytearray()
+            while len(data) <= MAX_REQUEST_BYTES:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not select.select([fd], [], [], remaining)[0]:
+                    raise HelperError("timeout", "timed out waiting for connect request")
+                chunk = os.read(fd, min(4096, MAX_REQUEST_BYTES + 1 - len(data)))
+                if not chunk:
+                    break
+                data.extend(chunk)
+                newline = data.find(b"\n")
+                if newline >= 0:
+                    if bytes(data[newline + 1:]).strip():
+                        raise HelperError("invalid", "connect accepts one JSON object")
+                    data = data[:newline + 1]
+                    break
+            raw = bytes(data).decode("utf-8")
+        size = len(raw.encode("utf-8"))
+    except HelperError:
+        raise
+    except UnicodeError as error:
+        raise HelperError("invalid", "connect request must be valid UTF-8") from error
+    if size > MAX_REQUEST_BYTES:
+        raise HelperError("invalid", "connect request exceeds 4096 bytes")
+    try:
+        request = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise HelperError("invalid", "connect expects one JSON object on stdin") from error
+    if not isinstance(request, dict):
+        raise HelperError("invalid", "connect expects one JSON object on stdin")
+    ssid = request.get("ssid")
+    if not isinstance(ssid, str) or not ssid or "\x00" in ssid:
+        raise HelperError("invalid", "SSID must be a non-empty string")
+    try:
+        ssid_bytes = ssid.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise HelperError("invalid", "SSID must be valid UTF-8") from error
+    if len(ssid_bytes) > MAX_SSID_BYTES:
+        raise HelperError("invalid", "SSID exceeds 32 bytes")
+    hidden = request.get("hidden", False)
+    if not isinstance(hidden, bool):
+        raise HelperError("invalid", "hidden must be a boolean")
+    psk = request.get("psk")
+    if psk is not None:
+        if not isinstance(psk, str):
+            raise HelperError("invalid", "password must be a string or null")
+        try:
+            encoded = psk.encode("utf-8")
+        except UnicodeEncodeError as error:
+            raise HelperError("invalid", "password must be valid UTF-8") from error
+        printable = all(0x20 <= byte <= 0x7E for byte in encoded)
+        if not ((printable and 8 <= len(encoded) <= 63) or
+                (len(encoded) == 64 and re.fullmatch(r"[0-9a-fA-F]{64}", psk))):
+            raise HelperError("invalid", "password must be 8-63 characters or 64 hexadecimal digits")
+    security = request.get("security")
+    if security is not None and security not in ("open", "wpa2", "wpa3"):
+        raise HelperError("invalid", "security must be open, wpa2, or wpa3")
+    if security == "open" and psk:
+        raise HelperError("invalid", "an open network cannot use a password")
+    if security in ("wpa2", "wpa3") and not psk:
+        raise HelperError("invalid", "a password is required for a secured hidden network")
+    return ssid, psk, hidden, security
+
+
+def clean_message(message, psk=None):
+    message = message.strip()
+    if psk:
+        message = message.replace(psk, "<redacted>")
+    return "".join(char for char in message if char in "\t" or ord(char) >= 32)[:512]
+
+
+def connect():
+    ssid, psk, hidden, security = read_join_request()
+    interface = require_wifi_device()
+    secret_input = f"{psk}\n" if psk is not None else None
+    saved = (next((profile for profile in wifi_profiles() if profile["ssid"] == ssid), None)
+             if psk is None else None)
+    if psk is None and saved is not None:
+        command = ["--wait", "60", "connection", "up", saved["uuid"], "ifname", interface]
+        uuid = saved["uuid"]
+    elif hidden and security is not None:
+        add = [
+            "--wait", "10", "connection", "add",
+            "type", "wifi", "ifname", interface, "con-name", ssid, "ssid", ssid,
+            "802-11-wireless.hidden", "yes", "connection.autoconnect", "yes",
+        ]
+        if security != "open":
+            key_mgmt = "wpa-psk" if security == "wpa2" else "sae"
+            add.extend(["802-11-wireless-security.key-mgmt", key_mgmt])
+        added = nmcli(add, timeout=12)
+        match = re.search(r"\(([0-9a-fA-F-]{36})\)", added.stdout)
+        if not match or not UUID_RE.fullmatch(match.group(1)):
+            raise HelperError("unavailable", "NetworkManager did not return the new profile UUID")
+        uuid = match.group(1)
+        command = ["--wait", "60"]
+        if secret_input is not None:
+            command.append("--ask")
+        command.extend(["connection", "up", uuid, "ifname", interface])
+    else:
+        command = ["--wait", "60"]
+        if secret_input is not None:
+            command.append("--ask")
+        command.extend(["device", "wifi", "connect", ssid, "ifname", interface])
+        if hidden:
+            command.extend(["hidden", "yes"])
+        uuid = None
+    result = run([NMCLI, *command], input_text=secret_input, timeout=65)
+    connected = result.returncode == 0
+    if uuid is None:
+        match = re.search(r"\bwith '([0-9a-fA-F-]{36})'", result.stdout)
+        uuid = match.group(1) if match and UUID_RE.fullmatch(match.group(1)) else None
+    return {
+        "ok": True,
+        "uuid": uuid,
+        "connected": connected,
+        "reason": None if connected else "activation-failed",
+        "message": None if connected else clean_message(result.stderr or result.stdout, psk),
+    }
+
+
+def forget(uuid):
+    if not UUID_RE.fullmatch(uuid):
+        raise HelperError("invalid", "connection UUID is invalid")
+    nmcli(["connection", "delete", "uuid", uuid], timeout=10)
+    return {"ok": True}
+
+
+def dispatch(arguments):
+    if arguments == ["status"]:
+        return status()
+    if arguments == ["scan"]:
+        require_wifi_device()
+        return scan()
+    if arguments == ["connect"]:
+        return connect()
+    if len(arguments) == 2 and arguments[0] == "forget":
+        return forget(arguments[1])
+    raise UsageError("invalid", "expected status, scan, connect, or forget UUID")
+
+
+def main(arguments):
+    try:
+        response = dispatch(arguments)
+        exit_code = 0
+    except HelperError as error:
+        response = {"ok": False, "error": error.code, "message": str(error)}
+        exit_code = 2 if isinstance(error, UsageError) else 1
+    except (OSError, ValueError, UnicodeError) as error:
+        response = {"ok": False, "error": "unavailable", "message": str(error)[:512]}
+        exit_code = 1
+    print(json.dumps(response, separators=(",", ":")))
+    return exit_code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

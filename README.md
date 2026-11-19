@@ -31,6 +31,10 @@ For wiring, mounting and the CarPiHAT power board, see the
 - **Phone:** plug it in over USB, or pair it in LIVI for wireless CarPlay /
   Android Auto. LIVI's hotspot gets a random password on first boot; you can
   see and change it in LIVI's Wi-Fi settings.
+- **LAN Wi-Fi:** with a compatible LIVI app, open **Settings → System →
+  Network** to scan for and join your router. A Wi-Fi adapter reserved for
+  wireless projection cannot also connect to the LAN; use Ethernet or a second
+  Wi-Fi adapter for both at once.
 - **Clock:** the Pi 5 keeps time with its RTC battery. The Pi 4 has no clock, so
   it needs a network connection for the correct time (used for automatic night
   mode).

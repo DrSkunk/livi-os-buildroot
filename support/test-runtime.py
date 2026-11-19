@@ -2,6 +2,7 @@
 """Exercise recovery scripts in temporary directories, without target devices."""
 
 import os
+import io
 import runpy
 import shutil
 import hashlib
@@ -1620,6 +1621,218 @@ class CanCapture(unittest.TestCase):
         wrapper = (SCRIPTS.parent / "libexec/livi-can-capture").read_text()
         self.assertIn('/usr/bin/systemctl start livi-can.service || fail', wrapper)
         self.assertIn('[ "$#" = 0 ] || fail', wrapper)
+
+
+class NetworkManagerHelper(unittest.TestCase):
+    HELPER = SCRIPTS.parent / "libexec/livi-network"
+    SUDOERS = SCRIPTS.parents[1] / "etc/sudoers.d/99-livi"
+
+    def setUp(self):
+        self.module = runpy.run_path(str(self.HELPER))
+
+    def test_sudoers_grants_only_the_helper_operations(self):
+        rules = self.SUDOERS.read_text()
+        self.assertIn(
+            "Cmnd_Alias LIVI_NETWORK = /usr/libexec/livi-network status, "
+            "/usr/libexec/livi-network scan, /usr/libexec/livi-network connect, "
+            "/usr/libexec/livi-network forget *",
+            rules,
+        )
+        self.assertIn(
+            "livi ALL=(root) NOPASSWD: NOSETENV: LIVI_HELPER, LIVI_STALE, "
+            "LIVI_WIFI_AP, LIVI_NETWORK",
+            rules,
+        )
+        self.assertNotIn("nmcli", rules)
+
+    def test_status_uses_app_contract_shape_and_retains_ipv4_values(self):
+        module = self.module
+        with mock.patch.dict(module["status"].__globals__, {
+            "checked_value": mock.Mock(return_value="connected:full"),
+            "device_rows": mock.Mock(return_value=[
+                {"device": "wlan0", "type": "wifi", "state": "connected",
+                 "connection": "Home"},
+            ]),
+            "device_addresses": mock.Mock(return_value=(["192.0.2.2/24"], "192.0.2.1")),
+            "projection_ap_active": mock.Mock(return_value=False),
+            "wifi_profiles": mock.Mock(return_value=[
+                {"uuid": "profile-id", "name": "Home", "ssid": "Home", "autoconnect": True},
+            ]),
+            "clock_status": mock.Mock(return_value={
+                "synchronized": True, "rtc": False, "utc": "2026-01-01T00:00:00+00:00",
+                "server": None,
+            }),
+        }):
+            answer = module["status"]()
+        self.assertEqual(answer["state"], "connected")
+        self.assertEqual(answer["connectivity"], "full")
+        self.assertEqual(answer["devices"][0]["ipv4"], ["192.0.2.2/24"])
+        self.assertEqual(answer["devices"][0]["gateway"], "192.0.2.1")
+        self.assertEqual(answer["wifi_profiles"][0]["ssid"], "Home")
+        self.assertIn("clock", answer)
+        self.assertTrue(answer["ok"])
+
+    def test_scan_unescapes_ssids_deduplicates_and_marks_saved(self):
+        module = self.module
+        with mock.patch.dict(module["scan"].__globals__, {
+            "profile_ssids": mock.Mock(return_value={"Home"}),
+            "wifi_devices": mock.Mock(return_value=[{"device": "wlan0"}]),
+            "nmcli": mock.Mock(return_value=subprocess.CompletedProcess(
+                [], 0, stdout="Home:55:WPA2:*\nCafe\\:Guest:90:WPA2:\nHome:80:WPA2:\n",
+            )),
+        }):
+            answer = module["scan"]()
+        self.assertEqual(answer["networks"], [
+            {"ssid": "Cafe:Guest", "signal": 90, "security": "WPA2",
+             "in_use": False, "saved": False},
+            {"ssid": "Home", "signal": 80, "security": "WPA2",
+             "in_use": True, "saved": True},
+        ])
+
+    def test_lists_saved_wifi_profiles_using_nmcli_list_and_detail_fields(self):
+        module = self.module
+        uuid = "12345678-1234-1234-1234-123456789abc"
+        checked = mock.Mock(side_effect=[
+            f"{uuid}:Cafe\\:guest:802-11-wireless:yes\n"
+            "abcdef01-1234-1234-1234-123456789abc:Ethernet:802-3-ethernet:yes",
+            "Cafe\\:guest",
+        ])
+        with mock.patch.dict(module["wifi_profiles"].__globals__, {"checked_value": checked}):
+            profiles = module["wifi_profiles"]()
+        self.assertEqual(profiles, [{
+            "uuid": uuid, "name": "Cafe:guest", "ssid": "Cafe:guest", "autoconnect": True,
+        }])
+        self.assertEqual(checked.call_args_list, [
+            mock.call(["--fields", "UUID,NAME,TYPE,AUTOCONNECT", "connection", "show"]),
+            mock.call(["--get-values", "802-11-wireless.ssid", "connection", "show", "uuid", uuid]),
+        ])
+
+    def test_password_is_sent_to_nmcli_stdin_not_its_arguments(self):
+        module = self.module
+        secret = "secret12345"
+        result = subprocess.CompletedProcess(
+            [], 0, stdout="Device 'wlan0' successfully activated with "
+                          "'12345678-1234-1234-1234-123456789abc'.",
+        )
+        with mock.patch("sys.stdin", io.StringIO(json.dumps({
+            "ssid": "Home", "psk": secret, "hidden": False,
+        }))):
+            run_nmcli = mock.Mock(return_value=result)
+            with mock.patch.dict(module["connect"].__globals__, {
+                "wifi_devices": mock.Mock(return_value=[{"device": "wlan0"}]),
+                "run": run_nmcli,
+            }):
+                answer = module["connect"]()
+        command = run_nmcli.call_args.args[0]
+        self.assertNotIn(secret, command)
+        self.assertEqual(run_nmcli.call_args.kwargs["input_text"], secret + "\n")
+        self.assertTrue(answer["connected"])
+        self.assertEqual(answer["uuid"], "12345678-1234-1234-1234-123456789abc")
+
+    def test_saved_network_uses_profile_without_prompting_for_password(self):
+        module = self.module
+        with mock.patch("sys.stdin", io.StringIO(json.dumps({
+            "ssid": "Home", "psk": None, "hidden": False,
+        }))):
+            run_nmcli = mock.Mock(return_value=subprocess.CompletedProcess([], 0))
+            profiles = mock.Mock(return_value=[
+                {"ssid": "Home", "uuid": "12345678-1234-1234-1234-123456789abc"},
+            ])
+            with mock.patch.dict(module["connect"].__globals__, {
+                "wifi_devices": mock.Mock(return_value=[{"device": "wlan0"}]),
+                "wifi_profiles": profiles,
+                "run": run_nmcli,
+            }):
+                answer = module["connect"]()
+        self.assertEqual(run_nmcli.call_args.args[0], [
+            module["NMCLI"], "--wait", "60", "connection", "up",
+            "12345678-1234-1234-1234-123456789abc", "ifname", "wlan0",
+        ])
+        self.assertTrue(answer["connected"])
+        self.assertEqual(answer["uuid"], "12345678-1234-1234-1234-123456789abc")
+
+    def test_hidden_network_uses_selected_security_without_exposing_password(self):
+        module = self.module
+        secret = "secret12345"
+        with mock.patch("sys.stdin", io.StringIO(json.dumps({
+            "ssid": "Hidden", "psk": secret, "hidden": True, "security": "wpa3",
+        }))):
+            nmcli_call = mock.Mock(return_value=subprocess.CompletedProcess(
+                [], 0, stdout="Connection 'Hidden' (12345678-1234-1234-1234-123456789abc) "
+                              "successfully added.",
+            ))
+            with mock.patch.dict(module["connect"].__globals__, {
+                "wifi_devices": mock.Mock(return_value=[{"device": "wlan0"}]),
+                "nmcli": nmcli_call,
+                "run": mock.Mock(return_value=subprocess.CompletedProcess([], 0)),
+            }):
+                answer = module["connect"]()
+        add_args = nmcli_call.call_args.args[0]
+        self.assertIn("802-11-wireless-security.key-mgmt", add_args)
+        self.assertIn("sae", add_args)
+        self.assertNotIn(secret, add_args)
+        self.assertTrue(answer["connected"])
+
+    def test_invalid_input_and_projection_owned_radio_are_reported(self):
+        module = self.module
+        with mock.patch("sys.stdin", io.StringIO(json.dumps({
+            "ssid": "Home", "psk": "short", "hidden": False,
+        }))):
+            with self.assertRaises(module["HelperError"]) as error:
+                module["read_join_request"]()
+        self.assertEqual(error.exception.code, "invalid")
+
+        with mock.patch("sys.stdin", io.StringIO(json.dumps({
+            "ssid": "Home", "psk": "pass\nword123", "hidden": False,
+        }))):
+            with self.assertRaises(module["HelperError"]) as error:
+                module["read_join_request"]()
+        self.assertEqual(error.exception.code, "invalid")
+
+        with mock.patch.dict(module["require_wifi_device"].__globals__, {
+            "wifi_devices": mock.Mock(return_value=[]),
+            "projection_ap_active": mock.Mock(return_value=True),
+        }):
+            with self.assertRaises(module["HelperError"]) as error:
+                module["require_wifi_device"]()
+        self.assertEqual(error.exception.code, "projection-ap")
+
+    def test_connect_request_is_read_on_newline_without_waiting_for_eof(self):
+        module = self.module
+        read_fd, write_fd = os.pipe()
+        try:
+            os.write(write_fd, b'{"ssid":"Open","psk":null,"hidden":false}\n')
+            with os.fdopen(read_fd, "r", encoding="utf-8") as request:
+                with mock.patch("sys.stdin", request):
+                    self.assertEqual(
+                        module["read_join_request"](),
+                        ("Open", None, False, None),
+                    )
+        finally:
+            os.close(write_fd)
+
+    def test_invalid_operation_returns_json_with_usage_exit_status(self):
+        output = io.StringIO()
+        with mock.patch("sys.stdout", output):
+            code = self.module["main"](["--help"])
+        self.assertEqual(code, 2)
+        self.assertEqual(json.loads(output.getvalue())["error"], "invalid")
+
+    def test_forget_accepts_only_uuid_and_never_runs_arbitrary_nmcli_args(self):
+        module = self.module
+        with mock.patch.dict(module["forget"].__globals__, {"nmcli": mock.Mock()}) as patched:
+            call_nmcli = patched["nmcli"]
+            with self.assertRaises(module["HelperError"]):
+                module["forget"]("--delete-all")
+        call_nmcli.assert_not_called()
+        call_nmcli = mock.Mock(return_value=subprocess.CompletedProcess([], 0))
+        with mock.patch.dict(module["forget"].__globals__, {"nmcli": call_nmcli}):
+            self.assertEqual(module["forget"]("12345678-1234-1234-1234-123456789abc"),
+                             {"ok": True})
+        call_nmcli.assert_called_once_with(
+            ["connection", "delete", "uuid", "12345678-1234-1234-1234-123456789abc"],
+            timeout=10,
+        )
 
 
 class PostImage(unittest.TestCase):
