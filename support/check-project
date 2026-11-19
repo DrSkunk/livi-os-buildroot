@@ -33,6 +33,7 @@ for required in \
   board/drskunk/livi/rootfs-overlay/usr/libexec/livi-power-helper \
   board/drskunk/livi/rootfs-overlay/usr/libexec/livi-media-storage \
   board/drskunk/livi/rootfs-overlay/usr/libexec/livi-media-eject \
+  board/drskunk/livi/rootfs-overlay/usr/libexec/livi-network \
   board/drskunk/livi/rootfs-overlay/usr/bin/livi-data-grow \
   support/make-os-update \
   board/drskunk/livi/rootfs-overlay/usr/libexec/livi-kiosk-ready \

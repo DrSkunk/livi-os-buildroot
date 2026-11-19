@@ -167,6 +167,36 @@ The service's claim/start/teardown switches run as root through systemd;
 they are not general sudo permissions. The existing persistent, root-owned
 systemd and NetworkManager configuration mounts support these operations.
 
+## NetworkManager client access
+
+The optional **Settings → System → Network** page uses the immutable
+`/usr/libexec/livi-network` helper through `sudo -n`. The OS permits only these
+operations: `status`, `scan`, `connect`, and `forget <uuid>`. Do not grant the
+app general `nmcli`, NetworkManager D-Bus, or root access.
+
+Each invocation prints one JSON object. Success has `"ok": true`; failure has
+`"ok": false`, an `error` code (`invalid`, `not-found`, `projection-ap`,
+`no-wifi`, `timeout`, `unavailable`, or `nmcli`) and a
+user-displayable `message`, and exits nonzero (usage errors exit 2). A failed
+join returns `"connected":false` and `"reason":"activation-failed"` in its
+successful helper response. `status` reports NetworkManager
+state/connectivity, devices and addresses, saved Wi-Fi profile metadata,
+projection-AP ownership, and clock status. `scan` returns
+`{"ok":true,"networks":[{"ssid":"...","signal":0,"security":"...","in_use":false,"saved":false}]}`.
+`connect` reads a single JSON object from stdin:
+`{"ssid":"...","psk":null,"hidden":false}`; the optional `security` field is
+`open`, `wpa2`, or `wpa3` for hidden networks. Passwords must never appear in
+arguments, environment variables, or logs. A completed join attempt returns
+`ok`, `uuid`, `connected`, and, on failure, `reason` and `message`. `forget`
+accepts only a NetworkManager connection UUID and returns `{"ok":true}`.
+
+When the projection AP owns the only Wi-Fi adapter, scans and joins return
+`projection-ap`; the user must release the projection adapter before joining
+LAN Wi-Fi. Ethernet or a second managed Wi-Fi adapter remains usable. Saved
+profiles and NetworkManager configuration persist under `/data`. The Network
+page is available only in an AppImage that implements this optional helper
+protocol.
+
 ## Local music storage
 
 The OS routes each supported USB filesystem through
