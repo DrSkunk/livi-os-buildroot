@@ -219,7 +219,8 @@ finish; an off/on ignition cycle may be needed to start again.
    shown. Match the connector orientation, **not wire colors**.
 3. Leave unused illumination/reverse wires disconnected and insulated.
 4. Turn ignition on: LIVI should boot. Turn it off: after **10 seconds**,
-   shutdown should start and the HAT should then cut power.
+   shutdown should start, the logo should show "Shutting down..." and the HAT
+   should then cut power.
 5. Repeat with ignition off for **less than 10 seconds**, then on: LIVI
    should stay running.
 

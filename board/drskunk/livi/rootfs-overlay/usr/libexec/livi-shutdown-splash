@@ -1,0 +1,19 @@
+#!/bin/sh
+set -eu
+
+case "${1-}" in
+  poweroff) message="Shutting down..." ;;
+  reboot) message="Restarting..." ;;
+  *) echo "livi-shutdown-splash: expected poweroff or reboot" >&2; exit 2 ;;
+esac
+
+# psplash creates its FIFO shortly after drawing; a stale FIFO has no reader.
+attempt=0
+until /usr/bin/timeout 1 /usr/bin/psplash-write "MSG $message" 2>/dev/null; do
+  attempt=$((attempt + 1))
+  if [ "$attempt" -ge 30 ]; then
+    echo "livi-shutdown-splash: psplash did not accept the message" >&2
+    exit 1
+  fi
+  sleep 0.1
+done

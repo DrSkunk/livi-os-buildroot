@@ -20,6 +20,10 @@ ProtectHome=yes
 ProtectKernelTunables=yes
 ProtectControlGroups=yes
 PrivateTmp=yes
+# Writable under ProtectSystem=strict; kept so LIVI can still read the last state.
+RuntimeDirectory=livi-power
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
 RestrictAddressFamilies=AF_UNIX
 
 [Install]

@@ -256,6 +256,52 @@ class BootSplash(unittest.TestCase):
         self.assertFalse(any("livi-splash.service" in line for line in conflicts))
         self.assertIn("ExecStartPre=+/usr/bin/systemctl stop livi-splash.service", app)
 
+    def run_shutdown_message(self, mode, accepts_after=0):
+        source = (SCRIPTS.parent / "libexec/livi-shutdown-splash").read_text()
+        source = source.replace(
+            "/usr/bin/timeout 1 /usr/bin/psplash-write",
+            f"write_message() {{ printf '%s\\n' \"$1\" >>\"$LOG\"; "
+            f"[ \"$(wc -l <\"$LOG\")\" -gt {accepts_after} ]; }}; write_message")
+        source = source.replace("sleep 0.1", ":")
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "writes"
+            log.touch()
+            result = subprocess.run(["sh", "-c", source, "livi-shutdown-splash", *mode],
+                                    capture_output=True, text=True,
+                                    env={**os.environ, "LOG": str(log)})
+            return result, log.read_text().splitlines()
+
+    def test_shutdown_splash_shows_action_message_once_psplash_listens(self):
+        for mode, message in (("poweroff", "MSG Shutting down..."),
+                              ("reboot", "MSG Restarting...")):
+            with self.subTest(mode=mode):
+                result, writes = self.run_shutdown_message([mode], accepts_after=2)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(writes, [message] * 3)
+
+    def test_shutdown_splash_rejects_unknown_mode_and_bounds_retries(self):
+        for mode in ([], ["halt"], ["poweroff;id"]):
+            with self.subTest(mode=mode):
+                result, writes = self.run_shutdown_message(mode)
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(writes, [])
+        result, writes = self.run_shutdown_message(["poweroff"], accepts_after=1000)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(len(writes), 30)
+        self.assertIn("did not accept", result.stderr)
+
+    def test_shutdown_splash_runs_after_app_and_survives_shutdown(self):
+        units = SCRIPTS.parent / "lib/systemd/system"
+        unit = configparser.ConfigParser(interpolation=None)
+        unit.read(units / "livi-shutdown-splash@.service")
+        self.assertEqual(unit["Unit"]["DefaultDependencies"], "no")
+        self.assertNotIn("Conflicts", unit["Unit"])
+        self.assertIn("livi.service", unit["Unit"]["After"].split())
+        self.assertIn("shutdown.target", unit["Unit"]["Before"].split())
+        self.assertEqual(unit["Service"]["ExecStart"], "/usr/libexec/livi-splash-start")
+        self.assertEqual(unit["Service"]["ExecStartPost"],
+                         "-/usr/libexec/livi-shutdown-splash %i")
+
     def test_panel_asset_and_boot_console_policy(self):
         board = ROOT / "board/drskunk/livi"
         header = (board / "boot-splash.png").read_bytes()[:24]
@@ -389,7 +435,10 @@ class PowerPrivilegeBoundary(unittest.TestCase):
             .replace("/usr/bin/systemctl", str(self.systemctl))
             .replace("/usr/bin/flock", str(self.flock))
             .replace("/run/livi-os-update.lock", str(path / "lock"))
+            .replace("/run/livi-power", str(path / "power"))
+            .replace("/bin/mkdir", "mkdir").replace("/bin/mv", "mv")
         )
+        self.state = path / "power/state"
 
     def launch(self, *args):
         return subprocess.run(
@@ -415,6 +464,14 @@ class PowerPrivilegeBoundary(unittest.TestCase):
         result = self.launch("poweroff")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("systemd refused", result.stderr)
+        self.assertEqual(json.loads(self.state.read_text()), {"state": "running"})
+
+    def test_publishes_pending_action_for_shutdown_overlay(self):
+        for action in ("poweroff", "reboot"):
+            with self.subTest(action=action):
+                self.assertEqual(self.launch(action).returncode, 0)
+                self.assertEqual(json.loads(self.state.read_text()), {"state": action})
+        self.assertEqual(sorted(p.name for p in self.state.parent.iterdir()), ["state"])
 
     def test_an_active_os_update_prevents_host_power_changes(self):
         self.flock.write_text('#!/bin/sh\nexit 1\n')
@@ -422,6 +479,7 @@ class PowerPrivilegeBoundary(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("OS update operation is running", result.stderr)
         self.assertEqual(result.stdout, "")
+        self.assertFalse(self.state.exists())
 
 
 class OsUpdatePrivilegeBoundary(unittest.TestCase):
@@ -1100,6 +1158,7 @@ class DisplayReadiness(unittest.TestCase):
     def test_live_native_output_is_ready(self):
         self.validate()
 
+    @unittest.skipUnless(Path("/proc").is_dir(), "requires Linux /proc")
     def test_real_live_process_is_ready(self):
         with subprocess.Popen(["sleep", "30"]) as process:
             try:
@@ -1161,6 +1220,7 @@ class DisplayReadiness(unittest.TestCase):
             self.assertEqual(main(), 1)
             self.assertTrue(stderr.write.called)
 
+    @unittest.skipUnless(Path("/proc").is_dir(), "requires Linux /proc")
     def test_real_report_reader_and_nonregular_file_rejection(self):
         main = self.module["main"]
         with (tempfile.TemporaryDirectory() as tmp,
@@ -1431,7 +1491,10 @@ class Obd2(unittest.TestCase):
         fake = mock.Mock()
         fake.run.side_effect = self.module["Stopped"]()
         calls = []
-        with mock.patch("builtins.open", mock.mock_open()), \
+        with mock.patch.dict(socket.__dict__, {
+            "PF_CAN": 29, "SOCK_RAW": 3, "CAN_RAW": 1,
+            "SOL_CAN_RAW": 101, "CAN_RAW_FILTER": 1,
+        }), mock.patch("builtins.open", mock.mock_open()), \
                 mock.patch("fcntl.flock"), mock.patch("signal.signal"), \
                 mock.patch("sys.argv", ["livi-obd2.py", "500000"]), \
                 mock.patch.dict(self.module["main"].__globals__, {
@@ -1527,16 +1590,19 @@ class CanCapture(unittest.TestCase):
         receiver = mock.Mock()
         receiver.recv.side_effect = frames
         ready = mock.Mock()
-        with mock.patch.dict(self.module["main"].__globals__, check_interface=ready), \
+        with mock.patch.dict(socket.__dict__, {
+            "PF_CAN": 29, "SOCK_RAW": 3, "CAN_RAW": 1,
+            "SOL_CAN_RAW": 101, "CAN_RAW_FILTER": 1,
+        }), mock.patch.dict(self.module["main"].__globals__, check_interface=ready), \
                 mock.patch("socket.socket", return_value=receiver) as constructor, \
                 mock.patch("builtins.print") as output, \
                 self.assertRaisesRegex(RuntimeError, "end capture"):
             self.module["main"]()
         ready.assert_called_once_with()
-        constructor.assert_called_once_with(socket.PF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
+        constructor.assert_called_once_with(29, 3, 1)
         receiver.bind.assert_called_once_with(("can0",))
         receiver.setsockopt.assert_called_once_with(
-            socket.SOL_CAN_RAW, socket.CAN_RAW_FILTER,
+            101, 1,
             b"".join(struct.pack("=II", can_id, 0xE00007FF) for can_id in ids),
         )
         self.assertEqual(output.call_args_list, [
@@ -1693,7 +1759,7 @@ class CarPiHATPostBuild(unittest.TestCase):
         shutil.copytree(ROOT / "board/drskunk/livi/rootfs-overlay", self.target,
                         symlinks=True)
         for name in (
-            "bin/bash", "bin/mount", "bin/umount",
+            "bin/bash", "bin/mount", "bin/umount", "bin/mkdir", "bin/mv",
             "usr/bin/stat", "usr/bin/dbus-run-session", "usr/bin/pipewire",
             "usr/bin/psplash", "usr/bin/psplash-write", "usr/bin/timeout",
             "usr/bin/pipewire-pulse", "usr/bin/wireplumber", "usr/bin/jq",
@@ -1775,6 +1841,13 @@ class CarPiHATPostBuild(unittest.TestCase):
                     result = self.build(board, setting)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertFalse(can_link.is_symlink())
+                    systemd = self.target / "etc/systemd/system"
+                    for target, instance in (("poweroff", "poweroff"), ("halt", "poweroff"),
+                                             ("reboot", "reboot")):
+                        splash = (systemd / f"{target}.target.wants"
+                                  / f"livi-shutdown-splash@{instance}.service")
+                        self.assertEqual(str(splash.readlink()),
+                                         "/usr/lib/systemd/system/livi-shutdown-splash@.service")
                     self.assertEqual(link.is_symlink(), setting in ("1", None))
                     if link.is_symlink():
                         self.assertEqual(
@@ -2161,6 +2234,10 @@ class CarPiHATPower(unittest.TestCase):
         self.clock = 0.0
         self.stopped = mock.Mock()
         self.stopped.is_set.return_value = False
+        self.publish = mock.Mock()
+
+    def published(self):
+        return [c.args[0] for c in self.publish.call_args_list]
 
     def run_monitor(self, readings):
         values = iter(readings)
@@ -2171,7 +2248,7 @@ class CarPiHATPower(unittest.TestCase):
         with mock.patch.object(self.module["time"], "monotonic",
                                side_effect=lambda: self.clock):
             with mock.patch.object(self.module["subprocess"], "run") as shutdown:
-                self.monitor(read, self.stopped)
+                self.monitor(read, self.stopped, self.publish)
                 return shutdown
 
     def test_exact_ten_second_threshold_including_ignition_off_at_boot(self):
@@ -2185,6 +2262,12 @@ class CarPiHATPower(unittest.TestCase):
             ["/usr/bin/systemctl", "--no-block", "poweroff"], check=True, timeout=10,
         )
         self.assertEqual(self.stopped.wait.call_count, 2)
+        self.assertEqual(self.published(), [
+            {"state": "running"},
+            {"state": "ignition-off", "seconds_remaining": 10},
+            {"state": "ignition-off", "seconds_remaining": 1},
+            {"state": "poweroff"},
+        ])
 
     def test_ignition_return_resets_the_full_countdown(self):
         times = iter([9.0, 9.1, 19.0, 19.1])
@@ -2192,6 +2275,14 @@ class CarPiHATPower(unittest.TestCase):
         shutdown = self.run_monitor([0, 1, 0, 0, 0])
         self.assertEqual(self.clock, 19.1)
         shutdown.assert_called_once()
+        self.assertEqual(self.published(), [
+            {"state": "running"},
+            {"state": "ignition-off", "seconds_remaining": 10},
+            {"state": "running"},
+            {"state": "ignition-off", "seconds_remaining": 10},
+            {"state": "ignition-off", "seconds_remaining": 1},
+            {"state": "poweroff"},
+        ])
 
     def test_ignition_high_never_requests_shutdown_and_stop_is_clean(self):
         self.stopped.wait.side_effect = lambda _interval: setattr(
@@ -2212,7 +2303,7 @@ class CarPiHATPower(unittest.TestCase):
                     side_effect=OSError("GPIO read failed"))
                 with mock.patch.object(self.module["subprocess"], "run") as shutdown:
                     with self.assertRaises(error):
-                        self.monitor(read, self.stopped)
+                        self.monitor(read, self.stopped, self.publish)
                     shutdown.assert_not_called()
 
     def test_rejected_shutdown_is_not_reported_as_success(self):
@@ -2223,7 +2314,20 @@ class CarPiHATPower(unittest.TestCase):
             with mock.patch.object(self.module["subprocess"], "run",
                                    side_effect=subprocess.CalledProcessError(1, "systemctl")):
                 with self.assertRaises(subprocess.CalledProcessError):
-                    self.monitor(lambda: next(readings), self.stopped)
+                    self.monitor(lambda: next(readings), self.stopped, self.publish)
+        self.assertEqual(self.published()[-2:], [{"state": "poweroff"}, {"state": "running"}])
+
+    def test_power_state_is_replaced_atomically_and_failures_do_not_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "power/state"
+            self.module["publish_state"].__globals__["POWER_STATE"] = state
+            self.module["publish_state"]({"state": "ignition-off", "seconds_remaining": 3})
+            self.assertEqual(json.loads(state.read_text()),
+                             {"state": "ignition-off", "seconds_remaining": 3})
+            self.assertEqual([p.name for p in state.parent.iterdir()], ["state"])
+            self.module["publish_state"].__globals__["POWER_STATE"] = state / "not-a-dir/state"
+            with self.assertLogs("livi-carpihat-power", "WARNING"):
+                self.module["publish_state"]({"state": "running"})
 
     def gpio_fixture(self, latch_consumer="power_ctrl"):
         gpiod = mock.MagicMock()

@@ -1,0 +1,14 @@
+[Unit]
+Description=Branded framebuffer splash during %i
+DefaultDependencies=no
+RequiresMountsFor=/run
+# Stop jobs are ordered before start jobs, so this draws once LIVI released DRM.
+After=livi.service livi-splash.service
+Before=shutdown.target final.target
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/livi-splash-start
+ExecStartPost=-/usr/libexec/livi-shutdown-splash %i
+StandardOutput=journal
+StandardError=journal

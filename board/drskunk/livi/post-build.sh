@@ -46,8 +46,9 @@ done
 # Fail image creation if Kconfig silently dropped a runtime dependency.
 for executable in bin/bash usr/bin/stat usr/bin/dbus-run-session usr/bin/pipewire \
   usr/bin/psplash usr/bin/psplash-write usr/bin/timeout \
-  usr/libexec/livi-splash-start usr/libexec/livi-splash-stop usr/libexec/livi-os-update-helper \
-  usr/libexec/livi-power-helper usr/bin/flock usr/bin/systemctl usr/bin/sudo \
+  usr/libexec/livi-splash-start usr/libexec/livi-splash-stop usr/libexec/livi-shutdown-splash \
+  usr/libexec/livi-os-update-helper \
+  usr/libexec/livi-power-helper usr/bin/flock bin/mkdir bin/mv usr/bin/systemctl usr/bin/sudo \
   usr/libexec/livi-media-storage usr/libexec/livi-media-eject \
   bin/mount bin/umount \
   usr/bin/pipewire-pulse usr/bin/wireplumber usr/bin/jq usr/bin/unsquashfs \
@@ -153,6 +154,12 @@ else
 fi
 ln -snf /usr/lib/systemd/system/livi-splash.service \
   "$TARGET/etc/systemd/system/sysinit.target.wants/livi-splash.service"
+for link in poweroff:poweroff halt:poweroff reboot:reboot; do
+  target="${link%%:*}"
+  mkdir -p "$TARGET/etc/systemd/system/$target.target.wants"
+  ln -snf /usr/lib/systemd/system/livi-shutdown-splash@.service \
+    "$TARGET/etc/systemd/system/$target.target.wants/livi-shutdown-splash@${link#*:}.service"
+done
 for unit in psplash-start.service psplash-systemd.service; do
   ln -snf /dev/null "$TARGET/etc/systemd/system/$unit"
 done

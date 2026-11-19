@@ -3,7 +3,10 @@
 
 from contextlib import ExitStack
 from collections.abc import Callable
+import json
 import logging
+import math
+import os
 from pathlib import Path
 import signal
 import subprocess
@@ -14,10 +17,29 @@ import time
 LOG = logging.getLogger("livi-carpihat-power")
 OFF_DELAY = 10.0
 POLL_INTERVAL = 0.1
+POWER_STATE = Path("/run/livi-power/state")
 
 
-def monitor(read_ignition: Callable[[], int], stopped: Event) -> None:
+def publish_state(state: dict) -> None:
+    """Atomically expose pending power events so LIVI can show them on screen."""
+    try:
+        POWER_STATE.parent.mkdir(mode=0o755, exist_ok=True)
+        temporary = POWER_STATE.with_name(f".{POWER_STATE.name}.{os.getpid()}")
+        temporary.write_text(json.dumps(state) + "\n")
+        temporary.chmod(0o644)
+        os.replace(temporary, POWER_STATE)
+    except OSError:
+        LOG.warning("Could not publish power state %s", state, exc_info=True)
+
+
+def monitor(
+    read_ignition: Callable[[], int],
+    stopped: Event,
+    publish: Callable[[dict], None] = publish_state,
+) -> None:
     off_since = None
+    remaining = None
+    publish({"state": "running"})
     while not stopped.is_set():
         value = read_ignition()
         if value not in (0, 1):
@@ -26,18 +48,30 @@ def monitor(read_ignition: Callable[[], int], stopped: Event) -> None:
         if value:
             if off_since is not None:
                 LOG.info("Ignition restored; cancelling key-off countdown")
+                publish({"state": "running"})
             off_since = None
+            remaining = None
         elif off_since is None:
             LOG.info("Ignition off; shutting down after %.0f seconds", OFF_DELAY)
             off_since = now
         elif now - off_since >= OFF_DELAY:
             LOG.info("Ignition remained off; requesting orderly poweroff")
-            subprocess.run(
-                ["/usr/bin/systemctl", "--no-block", "poweroff"],
-                check=True,
-                timeout=10,
-            )
+            publish({"state": "poweroff"})
+            try:
+                subprocess.run(
+                    ["/usr/bin/systemctl", "--no-block", "poweroff"],
+                    check=True,
+                    timeout=10,
+                )
+            except subprocess.SubprocessError:
+                publish({"state": "running"})
+                raise
             return
+        if off_since is not None:
+            seconds = math.ceil(OFF_DELAY - (now - off_since))
+            if seconds != remaining:
+                remaining = seconds
+                publish({"state": "ignition-off", "seconds_remaining": seconds})
         stopped.wait(POLL_INTERVAL)
 
 

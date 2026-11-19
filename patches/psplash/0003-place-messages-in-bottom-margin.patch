@@ -1,0 +1,32 @@
+From: LIVI OS maintainers <livi-os@localhost>
+Subject: [PATCH] Place psplash messages in the artwork's bottom margin
+
+The full-screen LIVI artwork uses the lower split area for the logo tagline.
+Put runtime messages at the bottom of the framebuffer instead, where the image
+has a black margin.
+
+Upstream-Status: Inappropriate [appliance artwork layout]
+Signed-off-by: LIVI OS maintainers <livi-os@localhost>
+---
+ psplash.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/psplash.c b/psplash.c
+--- a/psplash.c
++++ b/psplash.c
+@@ -49,6 +49,6 @@ psplash_draw_msg (PSplashFB *fb, const char *msg)
+   psplash_fb_draw_rect (fb, 
+ 			0, 
+-			SPLIT_LINE_POS(fb) - h, 
++			fb->height - h,
+ 			fb->width,
+ 			h,
+ 			PSPLASH_BACKGROUND_COLOR);
+@@ -56,6 +56,6 @@ psplash_draw_msg (PSplashFB *fb, const char *msg)
+   psplash_fb_draw_text (fb,
+ 			(fb->width-w)/2, 
+-			SPLIT_LINE_POS(fb) - h,
++			fb->height - h,
+ 			PSPLASH_TEXT_COLOR,
+ 			&FONT_DEF,
+ 			msg);

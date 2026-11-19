@@ -12,5 +12,18 @@ esac
 exec 9>/run/livi-os-update.lock
 /usr/bin/flock -n 9 || fail "an OS update operation is running"
 cd /
-exec /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root \
-  /usr/bin/systemctl --no-block "$1"
+
+# Atomically publish the pending action for LIVI's shutdown overlay.
+publish_state() {
+  { [ -d /run/livi-power ] || /bin/mkdir -m 0755 /run/livi-power; } &&
+    printf '{"state": "%s"}\n' "$1" >/run/livi-power/.state.$$ &&
+    /bin/mv -f /run/livi-power/.state.$$ /run/livi-power/state
+} 2>/dev/null
+publish_state "$1" || echo "livi-power-helper: could not publish power state" >&2
+
+/usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root \
+  /usr/bin/systemctl --no-block "$1" || {
+  status=$?
+  publish_state running || true
+  exit "$status"
+}

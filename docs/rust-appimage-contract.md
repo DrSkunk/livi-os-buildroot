@@ -253,6 +253,22 @@ force a reset. Core must await the exit status and show failures without
 quitting first. System power pages require a confirmation click, and application
 update relaunches must not be interpreted as host reboot requests.
 
+Pending host power events are published in `/run/livi-power/state`, a
+world-readable JSON object replaced atomically (read it whole; never hold it
+open). A missing file means `running`. `state` is one of:
+
+| `state` | Written by | Meaning |
+| --- | --- | --- |
+| `running` | CarPiHAT monitor start, ignition restored, refused request | No power change is pending |
+| `ignition-off` | CarPiHAT monitor, once per whole second | Poweroff in `seconds_remaining` (integer, 10…1) unless ignition returns |
+| `poweroff` | CarPiHAT monitor or `livi-power-helper poweroff` | Poweroff has been queued |
+| `reboot` | `livi-power-helper reboot` | Reboot has been queued |
+
+Core should poll it (or watch it with inotify) and draw a full-screen countdown
+for `ignition-off`, and "Shutting down..."/"Restarting..." for `poweroff`/`reboot`,
+until systemd stops it. Ignore unknown states and fields. After LIVI exits,
+the OS shows the logo with the same message until power is cut.
+
 ## Readiness and recovery
 
 Do **not** let an external health checker connect to Smithay's control socket:

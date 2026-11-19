@@ -29,11 +29,18 @@ Boot/storage behavior has been exercised in QEMU, but that does not validate
 the Pi's display, touch, audio, radios, phone projection or firmware rollback.
 Physical hardware acceptance is still required.
 
-## Boot splash
+## Boot and shutdown splash
 
 The early psplash service displays the compiled white logo on black, rotated for
 the Waveshare panel. LIVI stops psplash before starting the DRM compositor, so
 a brief black handoff is possible. Changing the artwork requires an OS rebuild.
+
+On poweroff, halt or reboot, `livi-shutdown-splash@.service` redraws the same
+logo once LIVI has released the display, with "Shutting down..." or
+"Restarting..." in the black margin below the logo. It stays until the kernel
+powers off or resets. Before that,
+LIVI can show its own overlay from `/run/livi-power/state` (see the
+[app contract](rust-appimage-contract.md#host-power-controls)).
 The media bundle includes libva, libssh and Vulkan runtime libraries required by
 its GStreamer plugin; their presence does not imply hardware decoding support.
 
@@ -210,7 +217,8 @@ limits and commissioning procedure.
 
 By default, the HAT holds power until shutdown completes. Its BCM12 ignition
 input requests shutdown after ten seconds off; ignition returning during the
-countdown cancels it. Keep permanent power and ACC separate. See the
+countdown cancels it. The countdown is published to `/run/livi-power/state`
+so LIVI can display it. Keep permanent power and ACC separate. See the
 [wiring and commissioning guide](hardware-setup-pi5.md#carpihat--wire-power-and-ignition).
 
 | Partition | Size / filesystem | Purpose |

@@ -69,13 +69,20 @@ def check_appimage(image):
         check(extracted)
 
 
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 if __name__ == "__main__":
     try:
         if len(sys.argv) == 3 and sys.argv[1] == "--appimage":
             image = Path(sys.argv[2])
             expected = Path(f"{image}.sha256").read_text().split()[0]
-            with image.open("rb") as stream:
-                actual = hashlib.file_digest(stream, "sha256").hexdigest()
+            actual = sha256_file(image)
             if expected != actual:
                 raise ValueError("AppImage checksum mismatch")
             check_appimage(image)
